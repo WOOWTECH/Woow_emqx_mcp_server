@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "emqx-mcp-server"
+version = "0.1.0"
+description = "MCP server exposing the EMQX v5 REST API as curated tools"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=3.4.5,<4",
+    "httpx",
+    "pydantic>=2",
+    "pydantic-settings",
+]
+
+[project.optional-dependencies]
+admin = ["fastapi>=0.115", "uvicorn[standard]", "sse-starlette", "pyjwt>=2.9", "python-multipart"]
+dev = ["pytest", "pytest-asyncio", "anyio"]
+
+[project.scripts]
+emqx-mcp-server = "emqx_mcp_server.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["emqx_mcp_server", "emqx_mcp_admin"]
