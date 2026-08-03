@@ -11,9 +11,39 @@ from pydantic import BaseModel, Field
 from emqx_mcp_server.gating import ToolGate
 from emqx_mcp_server.registry import TOOL_REGISTRY, ToolCategory
 
-from ..store import ToolConfigStore
+from ..store import ToolConfigStore, env_from_tool_settings
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
+
+
+async def apply_to_runtime(settings: dict[str, Any]) -> str:
+    """Push the switches into the MCP subprocess and restart it.
+
+    `mcp_admin_core.process` only forwards the `connection` section and
+    `mcp_server.env`, so the switches have to be written into the latter —
+    otherwise the GUI toggles while the server keeps serving every tool.
+
+    Returns "ok", "partial" (saved but not yet live) or "detached" (no core).
+    """
+    try:
+        from mcp_admin_core.config import get_config_store
+        from mcp_admin_core.process import get_process_manager
+    except Exception:  # noqa: BLE001 — unit tests run without the core
+        return "detached"
+
+    store = get_config_store()
+    # The core store caches the whole file in memory; our own writer just
+    # touched it, so drop the cache before patching or the tools section
+    # gets clobbered by a stale copy.
+    await store.reload()
+    mcp_server = await store.get("mcp_server", {}) or {}
+    env = {**(mcp_server.get("env") or {}), **env_from_tool_settings(settings)}
+    await store.patch("mcp_server", {**mcp_server, "env": env})
+
+    manager = get_process_manager()
+    if manager.is_running and not await manager.restart():
+        return "partial"
+    return "ok"
 
 
 def get_store() -> ToolConfigStore:
@@ -130,12 +160,14 @@ def get_tools(store: ToolConfigStore = Depends(get_store)) -> dict[str, Any]:
 
 
 @router.put("")
-def put_tools(
+async def put_tools(
     settings: ToolSettings, store: ToolConfigStore = Depends(get_store)
 ) -> dict[str, Any]:
-    """Persist the switches the operator changed.
+    """Persist the switches the operator changed, then make them take effect.
 
     Only the fields present in the request are touched, so the GUI can send
     a single toggle without restating the whole configuration.
     """
-    return _view(store.save(settings.to_patch()))
+    saved = store.save(settings.to_patch())
+    status = await apply_to_runtime(saved)
+    return {**_view(saved), "status": status}
