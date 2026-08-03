@@ -2,6 +2,37 @@
 FROM node:20-alpine AS frontend
 RUN apk add --no-cache git
 RUN git clone --depth 1 https://github.com/WOOWTECH/woow_n8n_mcp_server /src
+
+# The shared SPA hard-codes n8n and Odoo. Everything EMQX-specific is applied
+# here, so the upstream frontend can still be pulled fresh on every build.
+COPY frontend-overrides/ConnectionConfig.jsx /src/frontend/src/pages/ConnectionConfig.jsx
+
+WORKDIR /src/frontend/src
+RUN set -eux; \
+    # Sidebar: give EMQX its own product name instead of the generic fallback.
+    sed -i "s|: 'MCP Admin';|: appType === 'emqx' ? 'EMQX MCP Admin' : 'MCP Admin';|" \
+        components/Sidebar.jsx; \
+    # Dashboard: a broker has nodes and connections, not a database and modules.
+    sed -i "s|title={isN8n ? 'n8n Instance' : 'Odoo Instance'}|title={appType === 'emqx' ? 'EMQX Broker' : isN8n ? 'n8n Instance' : 'Odoo Instance'}|" \
+        pages/Dashboard.jsx; \
+    sed -i "s|title={isN8n ? 'Database' : 'Database'}|title={appType === 'emqx' ? 'Broker Node' : 'Database'}|" \
+        pages/Dashboard.jsx; \
+    sed -i "s|subtitle={isOdoo ? 'Odoo database' : isN8n ? 'n8n database' : 'Target database'}|subtitle={appType === 'emqx' ? 'EMQX cluster node' : isOdoo ? 'Odoo database' : isN8n ? 'n8n database' : 'Target database'}|" \
+        pages/Dashboard.jsx; \
+    sed -i "s|title={isN8n ? 'Workflows' : 'Modules'}|title={appType === 'emqx' ? 'Connections' : isN8n ? 'Workflows' : 'Modules'}|" \
+        pages/Dashboard.jsx; \
+    sed -i "s|subtitle={isN8n ? 'Active workflows' : 'Installed modules'}|subtitle={appType === 'emqx' ? 'Connected MQTT clients' : isN8n ? 'Active workflows' : 'Installed modules'}|" \
+        pages/Dashboard.jsx; \
+    # Settings: the command is python3 here, and the bearer token is generic.
+    sed -i 's|placeholder="odoo-mcp-server"|placeholder="python3"|' pages/SettingsPage.jsx; \
+    sed -i 's|Bearer Token (optional, for n8n proxy)|Bearer Token (optional, sent upstream to the MCP server)|' \
+        pages/SettingsPage.jsx; \
+    # Fail the build rather than ship a half-patched UI.
+    grep -q "EMQX MCP Admin" components/Sidebar.jsx; \
+    grep -q "EMQX Broker" pages/Dashboard.jsx; \
+    grep -q "Connected MQTT clients" pages/Dashboard.jsx; \
+    grep -q "EMQX Connection" pages/ConnectionConfig.jsx
+
 WORKDIR /src/frontend
 # npm ci skips devDependencies when NODE_ENV=production, and vite is a devDep.
 RUN npm install --include=dev && npx vite build

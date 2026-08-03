@@ -38,11 +38,14 @@ async def _probe_emqx() -> dict[str, Any]:
                 "version": None, "connections": 0}
 
     rows = nodes if isinstance(nodes, list) else []
+    first = rows[0] if rows else {}
     return {
         "healthy": True,
         "url": base,
         "error": None,
-        "version": rows[0].get("version") if rows else None,
+        "version": first.get("version"),
+        "node_name": first.get("node"),
+        "edition": first.get("edition"),
         "connections": sum(n.get("connections", 0) or 0 for n in rows),
         "node_count": len(rows),
     }
@@ -73,7 +76,9 @@ async def health() -> dict[str, Any]:
         "target_app": target,
         "proxy": {"healthy": True, "pod_name": "built-in reverse proxy"},
         "version": target.get("version"),
-        "db_name": "emqx",
+        # The Dashboard's third card is relabelled "Broker Node" for EMQX, so
+        # the node name is what belongs in this slot.
+        "db_name": target.get("node_name") or "emqx",
         "item_count": target.get("connections", 0),
         "namespace": os.environ.get("NAMESPACE", "podman"),
     }
