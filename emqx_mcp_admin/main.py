@@ -24,3 +24,19 @@ app = create_app(
         logs.router,
     ],
 )
+
+
+@app.middleware("http")
+async def no_store(request, call_next):
+    """Keep an admin UI out of every cache in front of it.
+
+    Behind Cloudflare a single 404 from before the tunnel route existed got
+    cached at the edge and kept serving long after the origin was healthy.
+    Nothing here is cacheable anyway: the SPA shell is tiny and every API
+    response is live state.
+    """
+    response = await call_next(request)
+    if not request.url.path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+    return response
