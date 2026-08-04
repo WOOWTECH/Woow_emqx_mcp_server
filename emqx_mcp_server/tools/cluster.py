@@ -108,17 +108,48 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
         ) -> dict[str, Any]:
             """Time-series metrics over a recent window.
 
-            Use this to answer "was there a spike", "when did connections drop",
-            or to correlate an incident with broker load.
+            Returns a per-series summary plus a downsampled trend, so "was there
+            a spike" is answerable without reading every sample. Series that sat
+            at zero for the whole window are listed but not plotted.
             """
             body = json_body(
                 await emqx_request(emqx, "GET", "/monitor",
                                    params={"latest": latest_seconds})
             )
             points = body if isinstance(body, list) else []
+
+            # EMQX samples every 10s, so an hour is 361 points x 16 series.
+            # Returned raw that is ~87 KB, past any per-result budget, and the
+            # call fails instead of answering. Summarise, then downsample.
+            series: dict[str, list] = {}
+            for point in points:
+                for key, value in point.items():
+                    if key == "time_stamp" or not isinstance(value, (int, float)):
+                        continue
+                    series.setdefault(key, []).append(value)
+
+            summary = {}
+            for key, values in series.items():
+                if not values or not any(values):
+                    continue  # a series that is zero throughout says nothing
+                summary[key] = {"min": min(values), "max": max(values),
+                                "avg": round(sum(values) / len(values), 3),
+                                "last": values[-1]}
+
+            step = max(1, len(points) // 60)
+            sampled = points[::step][-60:]
+            trend = [{k: v for k, v in point.items()
+                      if k == "time_stamp" or k in summary} for point in sampled]
+
             return {"window_seconds": latest_seconds,
                     "point_count": len(points),
-                    "points": points[-240:]}
+                    "sample_interval_seconds": (latest_seconds // len(points)
+                                                if points else None),
+                    "active_series": sorted(summary),
+                    "idle_series_omitted": sorted(set(series) - set(summary)),
+                    "summary": summary,
+                    "trend_points": len(trend),
+                    "trend": trend}
 
     if on("emqx_list_alarms"):
 
