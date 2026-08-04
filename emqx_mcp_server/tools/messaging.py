@@ -43,11 +43,27 @@ def _as_retained(row: dict, topic: str, lookup: str) -> RetainedMessage:
     )
 
 
+async def _direct_lookup(emqx: httpx.AsyncClient, topic: str) -> dict | None:
+    """Read one retained message by topic.
+
+    EMQX accepts hierarchical topics here as long as the whole topic is
+    percent-encoded, slashes included: `woow%2Ftest%2Fx` returns 200 where the
+    raw form returns 404. A 404 means nothing is retained, which is an ordinary
+    answer rather than a failure.
+    """
+    try:
+        body = json_body(await emqx_request(
+            emqx, "GET", f"/mqtt/retainer/message/{quote(topic, safe='')}"))
+    except EmqxApiError:
+        return None
+    return body if isinstance(body, dict) and body else None
+
+
 async def _scan_for_topic(emqx: httpx.AsyncClient, topic: str) -> dict | None:
     """Walk the retained listing looking for one topic.
 
-    Needed because EMQX refuses a slash inside the path segment of
-    /mqtt/retainer/message/{topic}, and every real topic is hierarchical.
+    Fallback only. The listing rows carry no payload, so a hit here proves the
+    topic is retained without telling you what it holds.
     """
     for page in range(1, _SCAN_PAGES + 1):
         rows, meta = page_of(json_body(await emqx_request(
@@ -148,7 +164,26 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
             body = json_body(
                 await emqx_request(emqx, "POST", "/publish/bulk", json=payload)
             )
-            return {"count": len(messages), "published": True, "result": body}
+
+            # Same reason_code 16 rule as emqx_publish: raw rows make a message
+            # nobody received look exactly like a delivered one.
+            rows = body if isinstance(body, list) else [body]
+            results = []
+            for message, row in zip(messages, rows):
+                row = row if isinstance(row, dict) else {}
+                note = row.get("message")
+                delivered = row.get("reason_code") != 16
+                if not delivered and not note:
+                    note = "no_matching_subscribers"
+                results.append({"topic": message.topic, "id": row.get("id"),
+                                "delivered_to_subscribers": delivered,
+                                "broker_note": note})
+
+            undelivered = [r["topic"] for r in results
+                           if not r["delivered_to_subscribers"]]
+            return {"count": len(messages), "published": True,
+                    "delivered_count": len(results) - len(undelivered),
+                    "undelivered_topics": undelivered, "results": results}
 
     if on("emqx_list_retained"):
 
@@ -164,7 +199,8 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
 
             Retained messages are the broker's memory of "last known value" per
             topic — stale ones are a common cause of ghost entities appearing
-            after a device is removed.
+            after a device is removed. The listing carries no payloads; use
+            emqx_get_retained to read one.
             """
             rows, meta = page_of(json_body(await emqx_request(
                 emqx, "GET", "/mqtt/retainer/messages",
@@ -188,15 +224,12 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
             Returns found=false when the topic has nothing retained — that is
             an ordinary answer, not an error.
             """
-            if "/" not in topic:
-                try:
-                    body = json_body(await emqx_request(
-                        emqx, "GET", f"/mqtt/retainer/message/{quote(topic, safe='')}"))
-                    if isinstance(body, dict) and body:
-                        return _as_retained(body, topic, "direct")
-                except EmqxApiError:
-                    pass  # fall through to the listing scan
+            row = await _direct_lookup(emqx, topic)
+            if row is not None:
+                return _as_retained(row, topic, "direct")
 
+            # Fallback only: the listing carries no payload, so lookup=listing
+            # means "this topic is retained" without the contents.
             row = await _scan_for_topic(emqx, topic)
             if row is None:
                 return RetainedMessage(topic=topic, found=False, lookup="listing")
@@ -218,20 +251,20 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
             entry or a ghost device state. It cannot be undone — the previous
             payload is gone unless something republishes it.
             """
-            if "/" not in topic:
-                try:
-                    await emqx_request(
-                        emqx, "DELETE",
-                        f"/mqtt/retainer/message/{quote(topic, safe='')}")
-                    return {"topic": topic, "deleted": True, "method": "delete"}
-                except EmqxApiError:
-                    pass
+            try:
+                await emqx_request(
+                    emqx, "DELETE",
+                    f"/mqtt/retainer/message/{quote(topic, safe='')}")
+                return {"topic": topic, "deleted": True, "method": "delete"}
+            except EmqxApiError:
+                pass
 
-            # EMQX will not accept a slash inside that path segment, so clear
-            # the topic the way MQTT itself does: publish an empty retained
-            # payload.
+            # Fallback for brokers that refuse the direct endpoint: clear the
+            # topic the way MQTT itself does, by publishing an empty retained
+            # payload. Subscribers see this as a real message.
             await emqx_request(emqx, "POST", "/publish", json={
                 "topic": topic, "payload": "", "qos": 0, "retain": True,
                 "payload_encoding": "plain",
             })
-            return {"topic": topic, "deleted": True, "method": "empty_retained_publish"}
+            return {"topic": topic, "deleted": True,
+                    "method": "empty_retained_publish"}
