@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
@@ -51,16 +52,28 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
             """Start capturing MQTT packets for one client, topic or IP.
 
             Traces are the tool for "the device connects but nothing arrives".
-            Note the capture buffers in memory and only flushes to disk when it
-            expires — let it run to completion before reading the log, and do
-            not delete it early or the buffered events are lost.
+            The capture is written as it happens, so emqx_get_trace_log returns
+            events while the trace is still running. Deleting a trace removes
+            its log, so read it first.
             """
+            # EMQX has no "duration" field: it wants an explicit window as epoch
+            # seconds. Sending duration was accepted and ignored, leaving every
+            # trace at the broker default of 10 minutes.
+            start_at = int(time.time())
+            end_at = start_at + duration_seconds
             payload = {"name": name, "type": target_type, target_type: target,
-                       "duration": duration_seconds}
+                       "start_at": start_at, "end_at": end_at}
             body = json_body(await emqx_request(emqx, "POST", "/trace", json=payload))
+            body = body if isinstance(body, dict) else {}
+
+            # EMQX echoes end_at == start_at in the create response even though
+            # it stores the window correctly, so report what we asked for and
+            # point at the tool that shows the stored value.
             return {"name": name, "type": target_type, "target": target,
-                    "duration_seconds": duration_seconds, "created": True,
-                    "result": body}
+                    "duration_seconds": duration_seconds,
+                    "start_epoch": start_at, "end_epoch": end_at,
+                    "status": body.get("status"), "created": True,
+                    "note": "emqx_list_traces shows the window as the broker stored it."}
 
     if on("emqx_get_trace_log"):
 
@@ -75,12 +88,33 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
         ) -> dict[str, Any]:
             """Read what a trace captured.
 
-            A trace that is still running usually returns little or nothing —
-            its events sit in an in-memory buffer until the trace expires.
+            Returns the captured text per node. An empty log means the trace has
+            matched nothing yet, not that it failed.
             """
+            # log_detail reports only the file size per node. The captured text
+            # lives behind /log, which needs an explicit node.
+            safe_name = quote(name, safe='')
             detail = json_body(await emqx_request(
-                emqx, "GET", f"/trace/{quote(name, safe='')}/log_detail"))
-            return {"name": name, "detail": detail, "max_bytes": max_bytes}
+                emqx, "GET", f"/trace/{safe_name}/log_detail"))
+            rows = detail if isinstance(detail, list) else []
+
+            logs = []
+            for row in rows:
+                node = row.get("node")
+                if not node:
+                    continue
+                body = json_body(await emqx_request(
+                    emqx, "GET", f"/trace/{safe_name}/log",
+                    params={"node": node, "bytes": max_bytes}))
+                body = body if isinstance(body, dict) else {}
+                position = body.get("meta", {}).get("position", 0)
+                logs.append({"node": node, "size": row.get("size"),
+                             "text": body.get("items") or "",
+                             "truncated": bool(position >= max_bytes)})
+
+            total = sum(len(entry["text"]) for entry in logs)
+            return {"name": name, "nodes": logs, "captured_bytes": total,
+                    "empty": total == 0, "max_bytes": max_bytes}
 
     if on("emqx_delete_trace"):
 
@@ -93,8 +127,8 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
         ) -> dict[str, Any]:
             """[DESTRUCTIVE] Delete a trace and its captured log.
 
-            If the trace is still running, events buffered in memory are lost.
-            Call emqx_get_trace_log first, or wait for it to expire naturally.
+            The log file goes with it. Call emqx_get_trace_log first if you
+            still need what it captured.
             """
             await emqx_request(emqx, "DELETE", f"/trace/{quote(name, safe='')}")
             return {"name": name, "deleted": True}
