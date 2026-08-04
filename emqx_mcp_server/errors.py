@@ -15,7 +15,7 @@ class EmqxApiError(ToolError):
 
 
 async def emqx_request(
-    client: httpx.AsyncClient, method: str, path: str, **kwargs
+    client, method: str, path: str, **kwargs
 ) -> httpx.Response:
     """Call the EMQX REST API, converting failures into actionable errors."""
     try:
