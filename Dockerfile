@@ -1,10 +1,9 @@
-# --- stage 1: shared Admin SPA, built from the n8n bundle -------------------
+# --- stage 1: shared Admin SPA, built from the vendored frontend/ ----------
 FROM node:20-alpine AS frontend
-RUN apk add --no-cache git
-RUN git clone --depth 1 https://github.com/WOOWTECH/woow_n8n_mcp_server /src
 
-# The shared SPA hard-codes n8n and Odoo. Everything EMQX-specific is applied
-# here, so the upstream frontend can still be pulled fresh on every build.
+# frontend/ and frontend-overrides/ both live in this repo now, so no network
+# is needed at build time.
+COPY frontend/ /src/frontend/
 COPY frontend-overrides/ConnectionConfig.jsx /src/frontend/src/pages/ConnectionConfig.jsx
 
 WORKDIR /src/frontend/src
@@ -46,11 +45,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     MCP_ADMIN_CONFIG=/data/config.json
 
-# mcp_admin_core is vendored, unchanged, from the n8n bundle.
-RUN apt-get update && apt-get install -y --no-install-recommends git \
- && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/WOOWTECH/woow_n8n_mcp_server /tmp/bundle \
- && pip install /tmp/bundle && rm -rf /tmp/bundle
+# mcp_admin_core is vendored, unchanged, from the n8n bundle. The pyproject
+# for it lives at the repo root as mcp_admin_core.pyproject.toml so the
+# vendored source tree stays byte-identical to the upstream package.
+COPY mcp_admin_core/ /tmp/build/mcp_admin_core/
+COPY mcp_admin_core.pyproject.toml /tmp/build/pyproject.toml
+RUN pip install /tmp/build && rm -rf /tmp/build
 
 COPY pyproject.toml README.md ./
 COPY emqx_mcp_server/ ./emqx_mcp_server/
