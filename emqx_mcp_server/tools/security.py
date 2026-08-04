@@ -103,7 +103,8 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
                 await emqx_request(emqx, "DELETE", f"{base}/{_enc(user_id)}")
                 return AuthnUserResult(operation=operation, user_id=user_id)
 
-            raise ToolError(f"Unknown operation {operation!r}. Allowed: {allowed_list}.")
+            raise ToolError(
+                f"Unknown operation {operation!r}. Allowed: {allowed_list}.")
 
     if on("emqx_list_authz_sources"):
 
@@ -118,7 +119,21 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
             """
             body = json_body(await emqx_request(emqx, "GET", "/authorization/sources"))
             rows = body.get("sources", body) if isinstance(body, dict) else body
-            return {"sources": rows or []}
+            rows = rows or []
+
+            # A file source returns the whole acl.conf, and EMQX ships ~6 KB of
+            # explanatory comments in it. Keep the rules, drop the essay.
+            cleaned = []
+            for row in rows:
+                row = dict(row) if isinstance(row, dict) else row
+                text = row.get("rules") if isinstance(row, dict) else None
+                if isinstance(text, str):
+                    live = [line for line in text.splitlines()
+                            if line.strip() and not line.lstrip().startswith("%")]
+                    row["rules"] = "\n".join(live)
+                    row["rule_count"] = len(live)
+                cleaned.append(row)
+            return {"count": len(cleaned), "sources": cleaned}
 
     if on("emqx_authz_settings"):
 
@@ -162,14 +177,35 @@ def register(mcp: FastMCP, gate: ToolGate) -> None:
         ) -> dict[str, Any]:
             if operation not in allowed_z:
                 raise ToolError(
-                    f"Operation {operation!r} is switched off. Allowed: {allowed_z_list}."
+                    f"Operation {operation!r} is switched off. "
+                    f"Allowed: {allowed_z_list}."
                 )
             bucket = "users" if subject_type == "username" else "clients"
             base = f"/authorization/sources/built_in_database/rules/{bucket}"
 
+            # Without this check EMQX answers a bare 404, which reads as "wrong
+            # identifier" when the real problem is that the broker has no
+            # built-in ACL table at all. That is a common setup: the default
+            # install ships a file source only.
+            sources = json_body(await emqx_request(
+                emqx, "GET", "/authorization/sources"))
+            source_rows = (sources.get("sources", sources)
+                           if isinstance(sources, dict) else sources) or []
+            kinds = [r.get("type") for r in source_rows if isinstance(r, dict)]
+            if "built_in_database" not in kinds:
+                raise ToolError(
+                    "This broker has no built_in_database authorization source, "
+                    "so there is no ACL table to read or write. Configured "
+                    f"sources: {kinds or ['none']}. Add one in the EMQX "
+                    "Dashboard under Access Control -> Authorization -> Create "
+                    "-> Built-in Database, then retry. Use "
+                    "emqx_list_authz_sources to inspect what is in place."
+                )
+
             if operation == "read":
                 rows, _ = page_of(json_body(await emqx_request(emqx, "GET", base)))
-                return {"subject_type": subject_type, "count": len(rows), "rules": rows}
+                return {"subject_type": subject_type, "count": len(rows),
+                        "rules": rows}
             if operation == "create":
                 if not subject or not rules:
                     raise ToolError("create requires both `subject` and `rules`.")
