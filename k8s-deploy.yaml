@@ -1,8 +1,18 @@
-# Applied to the woowtech k3s cluster on 2026-08-03 (namespace: emqx-mcp).
-# Everything below is already live except the image, which must be built and
-# pushed first:
-#   docker build -t ttl.sh/woow-emqx-mcp-admin:24h .
-#   docker push  ttl.sh/woow-emqx-mcp-admin:24h
+# Applied to the woowtech k3s cluster (namespace: emqx-mcp).
+#
+# Build and push the image first. Locally:
+#   docker build -t ghcr.io/woowtech/woow-emqx-mcp-admin:v1.0.0 .
+#   docker push  ghcr.io/woowtech/woow-emqx-mcp-admin:v1.0.0
+#
+# Or in-cluster with kaniko, mounting a dockerconfigjson Secret that holds a
+# GHCR token with write:packages, which is how the live image was built:
+#   kubectl create job emqx-mcp-build --image=gcr.io/kaniko-project/executor:v1.23.2 -- \
+#     --context=git://github.com/WOOWTECH/Woow_emqx_mcp_server.git#refs/heads/main \
+#     --dockerfile=Dockerfile \
+#     --destination=ghcr.io/woowtech/woow-emqx-mcp-admin:v1.0.0
+#
+# The pull Secret below (ghcr-pull) is only needed while the GHCR package is
+# private. Make the package public and you can drop imagePullSecrets entirely.
 #
 # Public URL: https://emqx-mcp.woowtech.io  (Cloudflare tunnel
 # de5c466e-7826-4a5b-882d-128f8a31bc92 -> emqx-mcp-admin.emqx-mcp:8080)
@@ -20,6 +30,7 @@ metadata:
   namespace: emqx-mcp
   labels:
     app.kubernetes.io/name: emqx-mcp-admin
+    app.kubernetes.io/part-of: woow-emqx-mcp
 spec:
   replicas: 1
   selector:
@@ -30,6 +41,8 @@ spec:
       labels:
         app.kubernetes.io/name: emqx-mcp-admin
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull
       initContainers:
         # /data is an emptyDir so the app can rewrite config.json at runtime;
         # the Secret only seeds it.
@@ -41,8 +54,8 @@ spec:
             - { name: data, mountPath: /data }
       containers:
         - name: admin
-          image: ttl.sh/woow-emqx-mcp-admin:24h
-          imagePullPolicy: Always
+          image: ghcr.io/woowtech/woow-emqx-mcp-admin:v1.0.0
+          imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080, name: http }]
           env:
             - { name: MCP_ADMIN_CONFIG, value: /data/config.json }
