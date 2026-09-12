@@ -128,6 +128,29 @@ charts/emqx-mcp/scripts/check-drift.sh
 CONTEXT=default NAMESPACE=emqx-mcp charts/emqx-mcp/scripts/check-drift.sh
 ```
 
+### 在本機重跑 CI 的檢查
+
+`.github/workflows/chart.yml` 把工具版本釘死了，所以回報結果時請一起寫上版本 ——
+本機換一個 binary，數字就可能不一樣。
+
+```bash
+helm version                 # CI 釘 v3.19.5（azure/setup-helm@v4）
+kubeconform -v               # CI 釘 v0.6.7
+```
+
+要拿到跟 CI 同一版的 kubeconform，而不是 `$PATH` 上剛好那一版：
+
+```bash
+curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+  | tar -xz -C /usr/local/bin kubeconform
+helm lint charts/emqx-mcp
+kubeconform -strict -summary <各種 values 組合算出來的 render>
+# 6 種組合（default-ns、instance、production、secrets.create=true、
+# hardening、minimal）-> 23 resources found in 6 files - Valid: 23
+```
+
+這個 chart 目前用 v0.6.7 和 v0.8.0 跑都是 23/23，但只有 v0.6.7 是 CI 會重現的數字。
+
 ## 移除 —— 資料會留著
 
 ```bash

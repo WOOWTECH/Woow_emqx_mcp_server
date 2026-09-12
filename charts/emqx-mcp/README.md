@@ -134,6 +134,30 @@ charts/emqx-mcp/scripts/check-drift.sh
 CONTEXT=default NAMESPACE=emqx-mcp charts/emqx-mcp/scripts/check-drift.sh
 ```
 
+### Reproducing the CI checks locally
+
+`.github/workflows/chart.yml` pins its tools, so quote the version alongside any
+result you report — a different local binary can give a different count.
+
+```bash
+helm version                 # CI pins v3.19.5 (azure/setup-helm@v4)
+kubeconform -v               # CI pins v0.6.7
+```
+
+Get the same kubeconform CI uses instead of whatever is on `$PATH`:
+
+```bash
+curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+  | tar -xz -C /usr/local/bin kubeconform
+helm lint charts/emqx-mcp
+kubeconform -strict -summary <rendered values combinations>
+# 6 combinations (default-ns, instance, production, secrets.create=true,
+# hardening, minimal) -> 23 resources found in 6 files - Valid: 23
+```
+
+v0.6.7 and v0.8.0 both report 23/23 on this chart today, but only v0.6.7 is the
+number CI will reproduce.
+
 ## Uninstall — data is kept
 
 ```bash
