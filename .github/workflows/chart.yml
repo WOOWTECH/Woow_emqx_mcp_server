@@ -159,5 +159,26 @@ jobs:
           sys.exit("\n".join(bad)) if bad else print("no secrets committed")
           EOF
 
+      - name: Packaged chart keeps every template
+        run: |
+          # .helmignore directory patterns must be anchored (/deploy/), or a
+          # pattern like "tests/" would silently drop templates/tests/smoke.yaml
+          # from the package - the same class of bug the .gitignore comment
+          # warns about, but for `helm package` instead of git.
+          helm package . -d /tmp/pkg > /dev/null
+          got=$(tar -tzf /tmp/pkg/emqx-mcp-*.tgz | sed 's|^emqx-mcp/||' | sort)
+          echo "$got"
+          for f in Chart.yaml values.yaml templates/_helpers.tpl templates/NOTES.txt \
+                   templates/deployment.yaml templates/namespace.yaml \
+                   templates/secrets.yaml templates/service.yaml \
+                   templates/tests/smoke.yaml; do
+            echo "$got" | grep -qx "$f" || { echo "missing from package: $f"; exit 1; }
+          done
+          # deploy/ is instance values, passed with -f; it must NOT be packaged.
+          if echo "$got" | grep -q '^deploy/'; then
+            echo "deploy/ must not be packaged"; exit 1
+          fi
+          echo "package contains all 9 chart files and no instance values"
+
       - name: Shell scripts parse
         run: bash -n scripts/*.sh

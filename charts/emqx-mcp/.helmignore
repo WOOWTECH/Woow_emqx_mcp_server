@@ -13,4 +13,9 @@
 README*.md
 examples/
 scripts/
-deploy/
+# Anchored on purpose: an unanchored "deploy/" would also match any future
+# templates/deploy/ and silently drop it from the package. Per-cluster instance
+# values are passed with -f, never packaged.
+/deploy/
+# Never add an unanchored "tests/": templates/tests/smoke.yaml is the `helm
+# test` hook and must stay in the package.

@@ -182,6 +182,41 @@ owned by the release and are untouched either way.
 
 To remove the credentials too, delete them explicitly afterwards.
 
+### Reinstalling into the same namespace
+
+Kept Secrets outlive the release, but they keep the ownership metadata the
+release gave them (`app.kubernetes.io/managed-by: Helm`,
+`meta.helm.sh/release-name`, `meta.helm.sh/release-namespace`). What a later
+install does therefore depends on how it is run — all four rows below were
+checked on a live cluster with helm v3.19.5:
+
+| Reinstall | What happens |
+|-----------|--------------|
+| Same release name and namespace, `secrets.create=false` (the default) | Works. The chart only references the Secrets that are already there, so the admin password, the MCP token and the EMQX credentials survive the round trip byte for byte and the pod comes back with the same login. |
+| Same release name and namespace, `secrets.create=true` | Works — and **silently overwrites** the kept Secrets with the values you pass. Pass the same values, or you have rotated the credentials without meaning to. |
+| A different release name (or namespace), `secrets.create=true` | Refused before anything is created, because the kept Secrets still name the old release (see below). |
+| On top of Secrets you created by hand from `examples/secrets.example.yaml`, `secrets.create=true` | Refused the same way: hand-made Secrets carry no Helm metadata at all. This is the main reason `secrets.create` is `false` by default. |
+
+The refusal looks like this:
+
+```
+Error: INSTALLATION FAILED: Unable to continue with install: Secret "emqx-mcp-config"
+in namespace "emqx-mcp" exists and cannot be imported into the current release:
+invalid ownership metadata; label validation error: missing key
+"app.kubernetes.io/managed-by": must be set to "Helm"; ...
+```
+
+That is the keep policy working, not a bug. Reinstall with
+`secrets.create=false` (keeping the credentials), or — if you really want the
+chart to own and rewrite them — delete them first, which destroys them:
+
+```bash
+kubectl -n emqx-mcp delete secret emqx-mcp-config emqx-mcp-jwt ghcr-pull
+```
+
+The same rule applies to the Namespace when `namespace.create=true` and it is
+not the release namespace.
+
 ## Taking over the existing deployment
 
 The live objects were created with `kubectl apply -f k8s-deploy.yaml`, so they

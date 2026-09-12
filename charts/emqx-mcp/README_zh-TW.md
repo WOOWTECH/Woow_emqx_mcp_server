@@ -174,6 +174,38 @@ admin 密碼、MCP token、EMQX API 憑證不會被毀掉。這個 chart 沒有 
 
 真的要連憑證一起刪，就在之後自己明確刪掉。
 
+### 重新裝回同一個 namespace
+
+留著的 Secret 比 release 活得久，但也保留了當初 release 給它的 ownership metadata
+（`app.kubernetes.io/managed-by: Helm`、`meta.helm.sh/release-name`、
+`meta.helm.sh/release-namespace`）。所以之後再安裝會發生什麼，取決於你怎麼裝 ——
+以下四種都在真的叢集上用 helm v3.19.5 驗過：
+
+| 重裝方式 | 結果 |
+|----------|------|
+| 同 release 名稱、同 namespace，`secrets.create=false`（預設） | 成功。chart 只引用已經在那裡的 Secret，admin 密碼、MCP token 和 EMQX 憑證原封不動，pod 起來還是同一組登入。 |
+| 同 release 名稱、同 namespace，`secrets.create=true` | 成功 —— 而且會**默默覆蓋**留著的 Secret，寫進你傳的值。要傳一模一樣的值，否則等於無意間換了憑證。 |
+| 換 release 名稱（或換 namespace），`secrets.create=true` | 在建立任何東西之前就被擋下來：留著的 Secret 上面寫的還是舊 release（見下）。 |
+| 蓋在你照 `examples/secrets.example.yaml` 手動建立的 Secret 上，`secrets.create=true` | 同樣被擋：手動建的 Secret 根本沒有 Helm metadata。這就是 `secrets.create` 預設為 `false` 的主因。 |
+
+被擋下來時長這樣：
+
+```
+Error: INSTALLATION FAILED: Unable to continue with install: Secret "emqx-mcp-config"
+in namespace "emqx-mcp" exists and cannot be imported into the current release:
+invalid ownership metadata; label validation error: missing key
+"app.kubernetes.io/managed-by": must be set to "Helm"; ...
+```
+
+這是 keep 政策正常運作，不是 bug。用 `secrets.create=false` 重裝（憑證留著），
+或者你真的要讓 chart 接手並重寫它們，就先刪掉 —— 刪掉等於毀掉憑證：
+
+```bash
+kubectl -n emqx-mcp delete secret emqx-mcp-config emqx-mcp-jwt ghcr-pull
+```
+
+`namespace.create=true` 且 Namespace 不等於 release namespace 時，規則一樣。
+
 ## 接管現有的部署
 
 線上的資源是 `kubectl apply -f k8s-deploy.yaml` 建的，沒有 Helm 的 ownership
