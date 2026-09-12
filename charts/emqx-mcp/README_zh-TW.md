@@ -8,7 +8,7 @@
 
 | 資源 | 名稱 |
 |------|------|
-| Namespace | `emqx-mcp`（等於 release namespace 時不渲染） |
+| Namespace | `emqx-mcp`（等於 release namespace 時不渲染 — 見下方 `namespace.name`） |
 | Deployment | `emqx-mcp-admin` —— init container `seed-config` + container `admin` |
 | Service | `emqx-mcp-admin` —— ClusterIP `:8080` |
 
@@ -85,7 +85,7 @@ helm install emqx-mcp charts/emqx-mcp -n emqx-mcp --create-namespace \
 
 | Value | 預設 | 說明 |
 |-------|------|------|
-| `namespace.create` / `namespace.name` | `true` / `emqx-mcp` | 等於 `-n` 的 Namespace 永遠不渲染，`helm uninstall` 就刪不掉它 |
+| `namespace.create` / `namespace.name` | `true` / `""`（沒設就跟 `-n`） | 每個帶 namespace 的物件都渲染進 `namespace.name`，留空就用 `-n`——所以單純 `-n <ns>` 安裝一定只會動到 `<ns>`。只有要重現 `k8s-deploy.yaml` 寫死的 `emqx-mcp`，或 takeover 進一個跟 `-n` 不同的 namespace 時才需要明確設它。等於實際 namespace 的 Namespace 永遠不渲染，`helm uninstall` 就刪不掉它 |
 | `keepOnUninstall` | `true` | 幫 Namespace 和 chart 建的 Secret 加上 `helm.sh/resource-policy: keep` |
 | `image.repository` / `.tag` | `ghcr.io/woowtech/woow-emqx-mcp-admin` / `v1.0.0` | 手動建的映像，見 `k8s-deploy.yaml` 檔頭 |
 | `imagePullSecret` | `ghcr-pull` | GHCR package 改成 public 後設成 `""`，pod spec 裡的 `imagePullSecrets` 就會整個消失 |

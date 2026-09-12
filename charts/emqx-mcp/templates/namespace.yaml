@@ -1,13 +1,15 @@
 {{- /*
 Namespace. One that equals the release namespace is skipped: Helm keeps its
 release record there, so it is created with --create-namespace instead and can
-never be deleted by `helm uninstall`.
+never be deleted by `helm uninstall`. namespace.name defaults to the release
+namespace (see emqx-mcp.ns in _helpers.tpl), so this only renders when
+namespace.name is explicitly set to something other than `-n`.
 */ -}}
-{{- if and .Values.namespace.create (ne .Values.namespace.name .Release.Namespace) }}
+{{- if and .Values.namespace.create (ne (include "emqx-mcp.ns" .) .Release.Namespace) }}
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ .Values.namespace.name }}
+  name: {{ include "emqx-mcp.ns" . }}
   labels:
     {{- include "emqx-mcp.partOf" . | nindent 4 }}
   {{- include "emqx-mcp.keepAnnotations" . | nindent 2 }}

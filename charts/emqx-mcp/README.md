@@ -8,7 +8,7 @@ at the repository root. It renders the same three objects, field for field:
 
 | Object | Name |
 |--------|------|
-| Namespace | `emqx-mcp` (skipped when it equals the release namespace) |
+| Namespace | `emqx-mcp` (skipped when it equals the release namespace — see `namespace.name` below) |
 | Deployment | `emqx-mcp-admin` — init container `seed-config` + container `admin` |
 | Service | `emqx-mcp-admin` — ClusterIP `:8080` |
 
@@ -90,7 +90,7 @@ helm install emqx-mcp charts/emqx-mcp -n emqx-mcp --create-namespace \
 
 | Value | Default | Notes |
 |-------|---------|-------|
-| `namespace.create` / `namespace.name` | `true` / `emqx-mcp` | A Namespace equal to `-n` is never rendered, so `helm uninstall` cannot delete it |
+| `namespace.create` / `namespace.name` | `true` / `""` (falls back to `-n`) | Every namespaced object renders into `namespace.name`, or `-n` when it is left empty — so a plain `-n <ns>` install always stays inside `<ns>`. Set it explicitly only to reproduce `k8s-deploy.yaml`'s hardcoded `emqx-mcp`, or for a takeover into a namespace that differs from `-n`. A Namespace equal to the effective namespace is never rendered, so `helm uninstall` cannot delete it |
 | `keepOnUninstall` | `true` | Adds `helm.sh/resource-policy: keep` to the Namespace and to chart-created Secrets |
 | `image.repository` / `.tag` | `ghcr.io/woowtech/woow-emqx-mcp-admin` / `v1.0.0` | Built by hand; see the header of `k8s-deploy.yaml` |
 | `imagePullSecret` | `ghcr-pull` | Set to `""` once the GHCR package is public; `imagePullSecrets` then disappears from the pod spec |

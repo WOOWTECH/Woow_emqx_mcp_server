@@ -11,7 +11,15 @@ namespace:
   # (`-n`) is never rendered - create it with --create-namespace instead - so
   # `helm uninstall` can never delete the namespace the release lives in.
   create: true
-  name: emqx-mcp
+  # Empty means "use the release namespace (-n)", via `default .Release.Namespace`
+  # in emqx-mcp.ns (templates/_helpers.tpl). This is deliberate: every
+  # namespaced object in this chart is rendered into emqx-mcp.ns, so leaving
+  # this empty guarantees `helm install foo charts/emqx-mcp -n bar` only ever
+  # touches namespace `bar`, never a hardcoded name. k8s-deploy.yaml hardcodes
+  # namespace `emqx-mcp`; to reproduce that reference exactly, set this to
+  # "emqx-mcp" explicitly (deploy/local-k3s/emqx-mcp.yaml does this for the
+  # one live instance, which also always installs with `-n emqx-mcp`).
+  name: ""
 
 # Add `helm.sh/resource-policy: keep` to the Namespace and to chart-created
 # Secrets, so `helm uninstall` never deletes the admin password, the MCP token

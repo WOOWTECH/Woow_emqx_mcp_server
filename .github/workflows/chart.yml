@@ -26,7 +26,13 @@ jobs:
       - name: helm template (every values combination)
         run: |
           S="secrets.create=true,secrets.adminPassword=x,secrets.mcpAuthToken=x,secrets.jwtSecret=x,secrets.emqx.baseUrl=http://b:18083,secrets.emqx.apiKey=x,secrets.emqx.apiSecret=x,secrets.dockerConfigJson=DUMMY_DOCKERCONFIGJSON"
+          # namespace.name defaults to "" (-> the release namespace), so a
+          # plain `-n default` with no override must render everything into
+          # `default` and must NOT create a Namespace named emqx-mcp - that is
+          # the fix for the namespace-escape incident documented in the PR.
           helm template emqx-mcp . -n default                 > /tmp/default-ns.yaml
+          helm template emqx-mcp . -n default \
+            --set namespace.name=emqx-mcp                     > /tmp/explicit-ns.yaml
           helm template emqx-mcp . -n emqx-mcp                > /tmp/production.yaml
           helm template emqx-mcp . -n default --set "$S"      > /tmp/secrets.yaml
           helm template emqx-mcp . -n default \
@@ -42,7 +48,7 @@ jobs:
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
             | tar -xz -C /usr/local/bin kubeconform
           kubeconform -strict -summary \
-            /tmp/default-ns.yaml /tmp/production.yaml /tmp/secrets.yaml \
+            /tmp/default-ns.yaml /tmp/explicit-ns.yaml /tmp/production.yaml /tmp/secrets.yaml \
             /tmp/hardening.yaml /tmp/minimal.yaml /tmp/instance.yaml
 
       - name: Install PyYAML
@@ -84,8 +90,18 @@ jobs:
           n=$(grep -c '^kind: Secret$' /tmp/secrets.yaml || true)
           [ "$n" -eq 3 ] || { echo "expected 3 Secrets with secrets.create=true, got $n"; exit 1; }
           echo "secrets.create=true renders all 3 Secrets"
+          # namespace.name defaults to "" (-> -n), so a plain install must
+          # never create a Namespace outside the one it was given with -n -
+          # this is the fix for the namespace-escape incident in the PR.
+          if grep -q '^kind: Namespace$' /tmp/default-ns.yaml; then
+            echo "namespace.name must default to the release namespace: no Namespace object with a plain -n and no override"; exit 1
+          fi
+          if ! grep -q '  namespace: default$' /tmp/default-ns.yaml; then
+            echo "a plain -n default install must put every object in namespace 'default'"; exit 1
+          fi
+          echo "namespace.name defaults to -n; a plain install cannot escape it"
           # The Namespace equal to -n is never rendered, so uninstall cannot delete it.
-          grep -q '^kind: Namespace$' /tmp/default-ns.yaml || { echo "Namespace missing"; exit 1; }
+          grep -q '^kind: Namespace$' /tmp/explicit-ns.yaml || { echo "Namespace missing"; exit 1; }
           if grep -q '^kind: Namespace$' /tmp/production.yaml; then
             echo "Namespace must not render when it equals the release namespace"; exit 1
           fi
@@ -97,7 +113,7 @@ jobs:
           python3 - <<'EOF'
           import sys, yaml
           bad = []
-          for path in ("/tmp/default-ns.yaml", "/tmp/secrets.yaml"):
+          for path in ("/tmp/explicit-ns.yaml", "/tmp/secrets.yaml"):
               for d in yaml.safe_load_all(open(path)):
                   if not d or d["kind"] not in ("Namespace", "Secret", "PersistentVolumeClaim"):
                       continue

@@ -7,8 +7,15 @@ emqx-mcp-admin.emqx-mcp:8080, and changing a selector or a pod-template label
 would recreate the ReplicaSet and restart the pod.
 */}}
 
+{{/*
+The namespace every namespaced object is rendered into. Defaults to the
+release namespace (`-n`) so a plain `helm install foo charts/emqx-mcp -n bar`
+is always safe and never silently escapes to a different namespace; only the
+documented live instance (deploy/local-k3s/emqx-mcp.yaml) sets
+namespace.name explicitly, to the same value it already installs with `-n`.
+*/}}
 {{- define "emqx-mcp.ns" -}}
-{{ .Values.namespace.name }}
+{{ .Values.namespace.name | default .Release.Namespace }}
 {{- end -}}
 
 {{/* Shared label on the Namespace and the Deployment. */}}

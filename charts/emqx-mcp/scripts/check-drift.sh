@@ -11,6 +11,12 @@
 #      never declared (see that file) - so check 1 is not meant to be run that
 #      way; use check 2 against the cluster instead.
 #
+#      namespace.name defaults to the release namespace (`-n`), so this check
+#      passes --set namespace.name=emqx-mcp explicitly: k8s-deploy.yaml
+#      hardcodes namespace `emqx-mcp` regardless of what `-n` a real install
+#      would use, so reproducing it here needs the same explicit opt-in a real
+#      install would need.
+#
 #   2. chart vs a live cluster   (only when CONTEXT is set)
 #      kubectl diff of the render against the running objects.
 #
@@ -29,8 +35,10 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 # -n must differ from namespace.name, otherwise the Namespace is deliberately
-# not rendered and there would be nothing to compare it with.
-helm template "$RELEASE" . -n default --skip-tests "$@" > "$tmp/chart.yaml"
+# not rendered and there would be nothing to compare it with. namespace.name
+# defaults to -n now, so set it explicitly to the manifest's hardcoded value.
+helm template "$RELEASE" . -n default --skip-tests \
+  --set namespace.name=emqx-mcp "$@" > "$tmp/chart.yaml"
 
 rc=0
 if python3 - "$MANIFEST" "$tmp/chart.yaml" <<'PY'
