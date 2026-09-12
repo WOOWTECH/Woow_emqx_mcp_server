@@ -5,6 +5,11 @@
 #      The chart must render exactly the objects the hand-written manifest at
 #      the repository root declares. The ONLY tolerated difference is the
 #      `helm.sh/resource-policy: keep` annotation that keepOnUninstall adds.
+#      Run with no -f for this check. Adding
+#      `-f deploy/local-k3s/emqx-mcp.yaml` reports one expected extra
+#      difference - the Service label the live object carries but the manifest
+#      never declared (see that file) - so check 1 is not meant to be run that
+#      way; use check 2 against the cluster instead.
 #
 #   2. chart vs a live cluster   (only when CONTEXT is set)
 #      kubectl diff of the render against the running objects.

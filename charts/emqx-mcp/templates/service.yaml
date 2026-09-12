@@ -3,12 +3,23 @@ ClusterIP only. Public access is the local cluster's cloudflared, which routes
 emqx-mcp.woowtech.io -> http://emqx-mcp-admin.emqx-mcp.svc.cluster.local:8080.
 The tunnel is NOT part of this chart: it lives in the cloudflare namespace and
 is shared with other hostnames.
+
+metadata.labels come from .Values.service.labels and are empty by default, so
+the default render stays object-for-object k8s-deploy.yaml. The live Service on
+the local cluster carries a label that manifest never had (added out of band);
+deploy/local-k3s/emqx-mcp.yaml sets it here so a --take-ownership upgrade keeps
+it instead of stripping it. Service labels are mutable and are not part of the
+selector, so nothing restarts either way.
 */ -}}
 apiVersion: v1
 kind: Service
 metadata:
   name: emqx-mcp-admin
   namespace: {{ include "emqx-mcp.ns" . }}
+  {{- with .Values.service.labels }}
+  labels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
   selector:

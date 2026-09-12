@@ -34,6 +34,8 @@ jobs:
           helm template emqx-mcp . -n emqx-mcp \
             --set namespace.create=false,imagePullSecret=,tests.enabled=false \
                                                               > /tmp/minimal.yaml
+          helm template emqx-mcp . -n emqx-mcp \
+            -f deploy/local-k3s/emqx-mcp.yaml                 > /tmp/instance.yaml
 
       - name: kubeconform (schema validation)
         run: |
@@ -41,13 +43,35 @@ jobs:
             | tar -xz -C /usr/local/bin kubeconform
           kubeconform -strict -summary \
             /tmp/default-ns.yaml /tmp/production.yaml /tmp/secrets.yaml \
-            /tmp/hardening.yaml /tmp/minimal.yaml
+            /tmp/hardening.yaml /tmp/minimal.yaml /tmp/instance.yaml
 
       - name: Install PyYAML
         run: pip install --quiet pyyaml
 
       - name: Chart still renders k8s-deploy.yaml
         run: scripts/check-drift.sh
+
+      - name: Instance values keep the live Service label
+        run: |
+          # The running Service carries a label k8s-deploy.yaml never declared.
+          # deploy/local-k3s/emqx-mcp.yaml reproduces it so --take-ownership
+          # does not strip it; the chart default must NOT render it, or the
+          # drift check against k8s-deploy.yaml above would fail.
+          python3 - <<'EOF'
+          import sys, yaml
+          def svc(path):
+              for d in yaml.safe_load_all(open(path)):
+                  if d and d["kind"] == "Service":
+                      return d["metadata"].get("labels") or {}
+              sys.exit(f"{path}: no Service rendered")
+          want = {"app.kubernetes.io/name": "emqx-mcp-admin"}
+          got = svc("/tmp/instance.yaml")
+          if got != want:
+              sys.exit(f"instance render Service labels {got} != live {want}")
+          if svc("/tmp/production.yaml"):
+              sys.exit("default render must not put labels on the Service")
+          print("instance render keeps the live Service label; default render does not")
+          EOF
 
       - name: Required secrets are enforced
         run: |

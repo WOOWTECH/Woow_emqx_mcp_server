@@ -12,8 +12,10 @@
 #     -n emqx-mcp --take-ownership \
 #     -f charts/emqx-mcp/deploy/local-k3s/emqx-mcp.yaml
 #
-# Every value below equals the chart default; they are spelled out so a drift
-# check reads as a statement of what is deployed rather than an absence.
+# Every value below equals the chart default EXCEPT service.labels, which
+# reproduces a label the live Service carries but k8s-deploy.yaml never had
+# (see below). They are spelled out so a drift check reads as a statement of
+# what is deployed rather than an absence.
 #
 # NOTE: as of 2026-09-12 this deployment is down - the node the pod was
 # scheduled on is NotReady and cloudflared is 0/1 - so the takeover above is a
@@ -22,6 +24,11 @@
 namespace:
   # emqx-mcp equals the release namespace, so the Namespace object is not
   # rendered and `helm uninstall` can never delete it.
+  #
+  # NOTE: the chart therefore does NOT reproduce the live Namespace exactly.
+  # The running one also carries `purpose: e2e` (added out of band, never in
+  # k8s-deploy.yaml). Nothing renders it and nothing strips it, because the
+  # object is not part of this release's manifest.
   create: true
   name: emqx-mcp
 
@@ -47,6 +54,12 @@ config:
 service:
   type: ClusterIP
   port: 8080
+  # The live Service emqx-mcp-admin carries this label; k8s-deploy.yaml never
+  # did (no revision in git history has it - it was added out of band). Setting
+  # it here means `--take-ownership` keeps the label instead of stripping it.
+  # Service labels are not part of the selector, so this restarts nothing.
+  labels:
+    app.kubernetes.io/name: emqx-mcp-admin
 
 # Live pod template has no securityContext. Leave this off: turning it on
 # restarts the pod. See README "Follow-ups".

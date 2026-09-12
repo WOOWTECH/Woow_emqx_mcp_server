@@ -94,6 +94,7 @@ helm install emqx-mcp charts/emqx-mcp -n emqx-mcp --create-namespace \
 | `probes.readiness` / `probes.liveness` | `10`/`10`、`30`/`30` | 原樣渲染在 `httpGet: /healthz:8080` 底下；要加 `timeoutSeconds` 就加在這裡 |
 | `resources` | 100m/192Mi → 1000m/768Mi | |
 | `service.type` / `.port` | `ClusterIP` / `8080` | |
+| `service.labels` | `{}` | 只加在 Service 物件上的額外 label（不是 selector、也不是 pod template）。留空時渲染結果就完全等於 `k8s-deploy.yaml`；線上那個 instance 會設 `app.kubernetes.io/name`，因為跑著的 Service 帶著它 —— 見「接管現有的部署」 |
 | `hardening.enabled` | `false` | 選配的 `securityContext` + `automountServiceAccountToken: false`。**會改到 pod template，所以會重啟 pod** |
 | `tools.*` | 全開 | 只有 `secrets.create=true` 時才會寫進 `config.json` |
 | `secrets.create` | `false` | 見上 |
@@ -152,9 +153,25 @@ helm --kube-context default upgrade --install emqx-mcp charts/emqx-mcp \
 ```
 
 `deploy/local-k3s/emqx-mcp.yaml` 是這個 instance 的 values（不含機密）。帶上它，
-`helm template` 渲染出的 Deployment 和 Service 和 `k8s-deploy.yaml` **逐位元組相同**，
-所以收編不會改到 pod template 的任何欄位，什麼都不會重啟。接管時請保持
-`hardening.enabled=false`，那是唯一會讓 pod 重啟的開關。
+`helm template` 渲染出的 Deployment 和 `k8s-deploy.yaml` **逐欄位相同**（整個 pod
+template 都包含在內），所以收編不會改到 pod template 的任何欄位，什麼都不會重啟。
+接管時請保持 `hardening.enabled=false`，那是唯一會讓 pod 重啟的開關。
+
+線上叢集有兩個物件帶著 `k8s-deploy.yaml` 從來沒宣告過的 label（git 歷史裡沒有任何一
+版有，是在外面手動加上去的）：
+
+| 線上物件 | 多出來的 label | 接管時會發生什麼 |
+| --- | --- | --- |
+| `Service/emqx-mcp-admin` | `app.kubernetes.io/name: emqx-mcp-admin` | 會留著：instance values 的 `service.labels` 重現了它。沒有這個值的話 upgrade 會把 label 拿掉 —— 無害（Service 的 label 不屬於 selector，什麼都不會重啟），但是一個無聲的變更。 |
+| `Namespace/emqx-mcp` | `purpose: e2e` | 不會被動到：這個 Namespace 等於 release 的 namespace，chart 根本不會渲染那個物件。 |
+
+也就是說，對 Deployment 和 Service 來說「和 `k8s-deploy.yaml` 相同」與「和線上跑的
+相同」是同一句話；而這個 chart 刻意不重現線上的 Namespace。
+
+另外 Helm 自己會在每個收編的物件上蓋上 `app.kubernetes.io/managed-by: Helm` label
+和 `meta.helm.sh/release-name`、`meta.helm.sh/release-namespace` annotation。那是
+Helm 記錄 ownership 的方式，沒有任何 template 會渲染它，而且只會加在物件自己的
+metadata 上、不會碰到 pod template，所以同樣不會造成重啟。
 
 截至 2026-09-12 這個部署是停擺的 —— pod 排到的節點 `NotReady`、`cloudflared` 0/1 ——
 所以接管要先有一個健康的叢集。
@@ -174,9 +191,11 @@ helm --kube-context default upgrade --install emqx-mcp charts/emqx-mcp \
    PVC 加上 `setdefault` 式的 seeding（像 `Woow_k3s_litellm` 那樣）。
 3. **映像 tag 可覆寫而且是 `IfNotPresent`。** `v1.0.0` 被反覆重建、沒有 digest pin，
    不同節點可能在同一個 tag 下跑到不同的程式。請 pin digest，或用 CI 發不可變的 tag。
-4. **frontend 建置不可重現。** 沒有 `frontend/package-lock.json`，而
-   `npm install --include=dev` 現在會解析到一個建不起來的 `react-router`
-   （`Rollup failed to resolve import "cookie"`）。補一個 lockfile 兩個問題一起解決。
+4. **frontend 建置不可重現。** 沒有 `frontend/package-lock.json`，所以
+   `npm install --include=dev` 當天解析到什麼就是什麼：同一份 `Dockerfile` 今天可以
+   乾淨建起來（`vite v6.4.3`、1642 個模組），但解析結果會漂移，而且至少壞過一次
+   （解析到一個建不起來的 `react-router`，`Rollup failed to resolve import "cookie"`）。
+   補一個 lockfile 就能把它釘住。
 5. **`cloudflare/mcp-direct.js` 的 `/mcp` 會由 edge 注入上游 token。** 任何人連到那個
    主機名，就有一條免驗證、CORS 全開的路可以呼叫全部 39 個工具，包含破壞性的那些。
    請改上 OAuth gateway，或把 `/mcp` 別名拿掉。

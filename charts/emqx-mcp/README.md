@@ -99,6 +99,7 @@ helm install emqx-mcp charts/emqx-mcp -n emqx-mcp --create-namespace \
 | `probes.readiness` / `probes.liveness` | `10`/`10`, `30`/`30` | Rendered verbatim under `httpGet: /healthz:8080`; add `timeoutSeconds` here |
 | `resources` | 100m/192Mi → 1000m/768Mi | |
 | `service.type` / `.port` | `ClusterIP` / `8080` | |
+| `service.labels` | `{}` | Extra labels on the Service object only (not the selector, not the pod template). Empty keeps the render exactly `k8s-deploy.yaml`; the live instance sets `app.kubernetes.io/name` because the running Service carries it — see "Taking over" |
 | `hardening.enabled` | `false` | Opt-in `securityContext` + `automountServiceAccountToken: false`. **Changes the pod template, so it restarts the pod** |
 | `tools.*` | permissive | Written into `config.json` only when `secrets.create=true` |
 | `secrets.create` | `false` | See above |
@@ -159,10 +160,28 @@ helm --kube-context default upgrade --install emqx-mcp charts/emqx-mcp \
 ```
 
 `deploy/local-k3s/emqx-mcp.yaml` holds the instance values (no secrets). With
-them, `helm template` renders a Deployment and Service **byte-identical** to
-`k8s-deploy.yaml`, so the adoption changes no field of the pod template and
-nothing restarts. Keep `hardening.enabled=false` for the takeover; it is the
-one switch that would.
+them, `helm template` renders a Deployment **field-for-field identical** to
+`k8s-deploy.yaml` — the whole pod template included — so the adoption changes no
+field of the pod template and nothing restarts. Keep `hardening.enabled=false`
+for the takeover; it is the one switch that would.
+
+Two objects on the running cluster carry labels that `k8s-deploy.yaml` never
+declared (no revision in git history has them — they were added out of band):
+
+| live object | extra label | what the takeover does |
+| --- | --- | --- |
+| `Service/emqx-mcp-admin` | `app.kubernetes.io/name: emqx-mcp-admin` | kept: `service.labels` in the instance values reproduces it. Without that value an upgrade would strip it — harmless (Service labels are not part of the selector, nothing restarts) but a silent change. |
+| `Namespace/emqx-mcp` | `purpose: e2e` | untouched: the Namespace equals the release namespace, so the chart never renders that object at all. |
+
+So "identical to `k8s-deploy.yaml`" and "identical to what is running" are the
+same statement for the Deployment and the Service, and the chart deliberately
+does not reproduce the live Namespace.
+
+Helm itself then stamps every adopted object with the label
+`app.kubernetes.io/managed-by: Helm` and the annotations
+`meta.helm.sh/release-name` / `meta.helm.sh/release-namespace`. That is how
+ownership is recorded, no template renders it, and it lands on the object's own
+metadata — never on the pod template — so it restarts nothing either.
 
 As of 2026-09-12 that deployment is down — the node its pod was scheduled on is
 `NotReady` and `cloudflared` is `0/1` — so the takeover needs a healthy cluster
@@ -188,9 +207,11 @@ for a like-for-like chart conversion:
    repeatedly with no digest pin, so nodes can run different code under the same
    tag. Pin a digest, or publish immutable tags from CI.
 4. **The frontend build is not reproducible.** There is no
-   `frontend/package-lock.json`, and `npm install --include=dev` currently
-   resolves a `react-router` that fails to build (`Rollup failed to resolve
-   import "cookie"`). Committing a lockfile would fix both.
+   `frontend/package-lock.json`, so `npm install --include=dev` resolves
+   whatever is latest on the day: the same `Dockerfile` builds cleanly today
+   (`vite v6.4.3`, 1642 modules) but resolution can drift and has broken at
+   least once (a `react-router` that failed with `Rollup failed to resolve
+   import "cookie"`). Committing a lockfile would pin it.
 5. **`cloudflare/mcp-direct.js` injects the upstream token on `/mcp`.** Anyone
    reaching that hostname gets an unauthenticated, CORS-open path to all 39
    tools, including destructive ones. Serve the OAuth gateway instead, or drop

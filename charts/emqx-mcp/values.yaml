@@ -69,6 +69,12 @@ probes:
 service:
   type: ClusterIP
   port: 8080
+  # Extra labels on the Service object (not on the pod template, and not part
+  # of the selector, so changing them restarts nothing). Empty by default so
+  # the default render is exactly k8s-deploy.yaml; the live instance sets
+  # app.kubernetes.io/name here because the running Service carries that label
+  # even though the manifest never did - see deploy/local-k3s/emqx-mcp.yaml.
+  labels: {}
 
 # Opt-in pod hardening. OFF by default on purpose: every switch here changes
 # the pod template, which would restart the running pod. Turn it on only in a
