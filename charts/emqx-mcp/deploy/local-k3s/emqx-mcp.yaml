@@ -21,17 +21,14 @@
 # scheduled on is NotReady and cloudflared is 0/1 - so the takeover above is a
 # phase-2 action that needs a healthy cluster first.
 
-namespace:
-  # emqx-mcp equals the release namespace, so the Namespace object is not
-  # rendered and `helm uninstall` can never delete it.
-  #
-  # NOTE: the chart therefore does NOT reproduce the live Namespace exactly.
-  # The running one also carries `purpose: e2e` (added out of band, never in
-  # k8s-deploy.yaml). Nothing renders it and nothing strips it, because the
-  # object is not part of this release's manifest.
-  create: true
-  name: emqx-mcp
-
+# SAFETY: this file intentionally does NOT set `namespace:`. Placement is
+# controlled ENTIRELY by `-n`/`--namespace`. Never add a `namespace:` key here:
+# `emqx-mcp.ns` lets a values-file namespace silently win over `-n`, so a
+# `-n <test-ns> -f deploy/local-k3s/emqx-mcp.yaml` rehearsal would write into
+# the REAL live emqx-mcp namespace instead of the test one. That exact class of
+# bug already created a stray namespace on production woow-k3s once.
+#   helm upgrade --install emqx-mcp charts/emqx-mcp -n emqx-mcp \
+#     -f charts/emqx-mcp/deploy/local-k3s/emqx-mcp.yaml
 keepOnUninstall: true
 
 image:
