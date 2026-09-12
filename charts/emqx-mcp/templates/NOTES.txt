@@ -1,0 +1,31 @@
+EMQX MCP Admin ({{ .Chart.AppVersion }}) - release {{ .Release.Name }} in namespace {{ include "emqx-mcp.ns" . }}
+{{- if not .Values.secrets.create }}
+
+Secrets are NOT managed by this release (secrets.create=false). These must
+already exist in {{ include "emqx-mcp.ns" . }} - see examples/secrets.example.yaml:
+  {{ .Values.config.secretName }}  (key config.json)
+  {{ .Values.jwt.secretName }}  (key {{ .Values.jwt.secretKey }})
+{{- if .Values.imagePullSecret }}
+  {{ .Values.imagePullSecret }}  (kubernetes.io/dockerconfigjson, the GHCR package is private)
+{{- end }}
+{{- end }}
+
+Wait for the pod:
+  kubectl -n {{ include "emqx-mcp.ns" . }} rollout status deploy/emqx-mcp-admin --timeout=5m
+
+Verify:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs
+
+Reach the console (there is no Ingress or NodePort - only ClusterIP):
+  kubectl -n {{ include "emqx-mcp.ns" . }} port-forward svc/emqx-mcp-admin {{ .Values.service.port }}:{{ .Values.service.port }}
+  open http://localhost:{{ .Values.service.port }}  (user: the admin password in {{ .Values.config.secretName }})
+
+/data is an emptyDir and the init container re-seeds /data/config.json from
+{{ .Values.config.secretName }} on EVERY start. Anything changed in the GUI - a rotated MCP
+token, a new admin password, a tool toggle - is lost on the next restart unless
+you also write it back into the Secret.
+{{- if .Values.hardening.enabled }}
+
+hardening.enabled=true: this pod template differs from the one running live, so
+this release will restart the pod.
+{{- end }}

@@ -1,0 +1,111 @@
+name: chart
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    working-directory: charts/emqx-mcp
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.19.5
+
+      - name: helm lint
+        run: helm lint .
+
+      - name: helm template (every values combination)
+        run: |
+          S="secrets.create=true,secrets.adminPassword=x,secrets.mcpAuthToken=x,secrets.jwtSecret=x,secrets.emqx.baseUrl=http://b:18083,secrets.emqx.apiKey=x,secrets.emqx.apiSecret=x,secrets.dockerConfigJson=DUMMY_DOCKERCONFIGJSON"
+          helm template emqx-mcp . -n default                 > /tmp/default-ns.yaml
+          helm template emqx-mcp . -n emqx-mcp                > /tmp/production.yaml
+          helm template emqx-mcp . -n default --set "$S"      > /tmp/secrets.yaml
+          helm template emqx-mcp . -n default \
+            --set hardening.enabled=true                      > /tmp/hardening.yaml
+          helm template emqx-mcp . -n emqx-mcp \
+            --set namespace.create=false,imagePullSecret=,tests.enabled=false \
+                                                              > /tmp/minimal.yaml
+
+      - name: kubeconform (schema validation)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+          kubeconform -strict -summary \
+            /tmp/default-ns.yaml /tmp/production.yaml /tmp/secrets.yaml \
+            /tmp/hardening.yaml /tmp/minimal.yaml
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: Chart still renders k8s-deploy.yaml
+        run: scripts/check-drift.sh
+
+      - name: Required secrets are enforced
+        run: |
+          if helm template emqx-mcp . --set secrets.create=true > /dev/null 2>&1; then
+            echo "secrets.create=true rendered without any secret values"; exit 1
+          fi
+          echo "required() guards fire"
+          # All 3 Secrets must render; catches templates/secrets.yaml going
+          # missing from git behind an unanchored .gitignore pattern.
+          n=$(grep -c '^kind: Secret$' /tmp/secrets.yaml || true)
+          [ "$n" -eq 3 ] || { echo "expected 3 Secrets with secrets.create=true, got $n"; exit 1; }
+          echo "secrets.create=true renders all 3 Secrets"
+          # The Namespace equal to -n is never rendered, so uninstall cannot delete it.
+          grep -q '^kind: Namespace$' /tmp/default-ns.yaml || { echo "Namespace missing"; exit 1; }
+          if grep -q '^kind: Namespace$' /tmp/production.yaml; then
+            echo "Namespace must not render when it equals the release namespace"; exit 1
+          fi
+          echo "release-namespace guard works"
+
+      - name: Uninstall keeps data
+        run: |
+          # Namespace and every chart-created Secret must carry the keep policy.
+          python3 - <<'EOF'
+          import sys, yaml
+          bad = []
+          for path in ("/tmp/default-ns.yaml", "/tmp/secrets.yaml"):
+              for d in yaml.safe_load_all(open(path)):
+                  if not d or d["kind"] not in ("Namespace", "Secret", "PersistentVolumeClaim"):
+                      continue
+                  ann = (d["metadata"].get("annotations") or {})
+                  if ann.get("helm.sh/resource-policy") != "keep":
+                      bad.append(f"{path}: {d['kind']}/{d['metadata']['name']} has no keep policy")
+          sys.exit("\n".join(bad)) if bad else print("keepOnUninstall covers every stateful object")
+          EOF
+
+      - name: No real secrets committed
+        run: |
+          python3 - <<'EOF'
+          import sys, yaml
+          bad = []
+          v = yaml.safe_load(open("values.yaml"))["secrets"]
+          for k, val in v.items():
+              if k == "create":
+                  continue
+              if k == "emqx":
+                  if any(val.values()):
+                      bad.append("values.yaml secrets.emqx.* must be empty")
+              elif val:
+                  bad.append(f"values.yaml secrets.{k} must be empty")
+          for d in yaml.safe_load_all(open("/tmp/production.yaml")):
+              if d and d["kind"] == "Secret":
+                  bad.append("default render must not contain Secrets (secrets.create=false)")
+          for d in yaml.safe_load_all(open("examples/secrets.example.yaml")):
+              for k, val in ((d or {}).get("stringData") or {}).items():
+                  if "REPLACE_ME" not in str(val):
+                      bad.append(f"examples: {d['metadata']['name']}.{k} is not a placeholder")
+          sys.exit("\n".join(bad)) if bad else print("no secrets committed")
+          EOF
+
+      - name: Shell scripts parse
+        run: bash -n scripts/*.sh

@@ -460,16 +460,31 @@ docker run -d \
 docker compose up -d
 ```
 
-### 方式三：Kubernetes
+### 方式三：Kubernetes（Helm，建議）
+
+```bash
+helm install emqx-mcp charts/emqx-mcp -n emqx-mcp --create-namespace
+kubectl -n emqx-mcp get pods
+```
+
+[`charts/emqx-mcp`](charts/emqx-mcp/README_zh-TW.md) 渲染出的資源和 `k8s-deploy.yaml` 宣告的
+完全一樣，另外補上 manifest 一直沒有的東西：三個 Secret 在
+`charts/emqx-mcp/examples/secrets.example.yaml` 有占位字版本的文件，也可以用
+`--set secrets.create=true` 讓 chart 建立；`helm uninstall` 會保留它們；`helm test` 會跑一輪
+唯讀的煙霧測試，檢查 GUI、Admin API 和 MCP 端點。
+
+### 方式三之二：Kubernetes（原生 manifest）
 
 ```bash
 kubectl apply -f k8s-deploy.yaml
 kubectl -n emqx-mcp get pods
 ```
 
-manifest 會建立 namespace、存放 `config.json` 的 Secret、帶 `/healthz` 探針的 Deployment，
-以及 `:8080` 的 ClusterIP Service。init container 每次啟動都會從 Secret 重新寫入
-`/data/config.json`，所以 Secret 才是設定的真實來源。
+manifest 會建立 namespace、帶 `/healthz` 探針的 Deployment，以及 `:8080` 的 ClusterIP
+Service。它**不會**建立任何 Secret：`emqx-mcp-config`、`emqx-mcp-jwt`、`ghcr-pull` 都只是被
+引用，要先自己建好（見 `charts/emqx-mcp/examples/secrets.example.yaml`），否則 pod 會卡在
+`Init`。init container 每次啟動都會從 `emqx-mcp-config` 重新寫入 `/data/config.json`，
+所以 Secret 才是設定的真實來源。
 
 ### 方式四：開發模式
 

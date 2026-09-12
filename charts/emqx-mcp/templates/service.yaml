@@ -1,0 +1,19 @@
+{{- /*
+ClusterIP only. Public access is the local cluster's cloudflared, which routes
+emqx-mcp.woowtech.io -> http://emqx-mcp-admin.emqx-mcp.svc.cluster.local:8080.
+The tunnel is NOT part of this chart: it lives in the cloudflare namespace and
+is shared with other hostnames.
+*/ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: emqx-mcp-admin
+  namespace: {{ include "emqx-mcp.ns" . }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "emqx-mcp.selectorLabel" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: 8080
