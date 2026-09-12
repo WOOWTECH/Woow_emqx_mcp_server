@@ -1,0 +1,77 @@
+{{- /*
+The admin bundle: GUI, Admin API and MCP reverse proxy on 8080. The MCP server
+itself is spawned as a child process on 127.0.0.1:3000 and is unreachable from
+outside the pod.
+
+/data is an emptyDir so the app can rewrite config.json at runtime; the Secret
+only seeds it, and therefore wins again on every restart.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emqx-mcp-admin
+  namespace: {{ include "emqx-mcp.ns" . }}
+  labels:
+    {{- include "emqx-mcp.selectorLabel" . | nindent 4 }}
+    {{- include "emqx-mcp.partOf" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "emqx-mcp.selectorLabel" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "emqx-mcp.selectorLabel" . | nindent 8 }}
+    spec:
+      {{- if .Values.imagePullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret }}
+      {{- end }}
+      {{- if .Values.hardening.enabled }}
+      automountServiceAccountToken: {{ .Values.hardening.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.hardening.podSecurityContext | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: seed-config
+          image: {{ include "emqx-mcp.initImage" . }}
+          command: ["sh","-c","cp /seed/config.json /data/config.json && chmod 600 /data/config.json"]
+          {{- if .Values.hardening.enabled }}
+          securityContext:
+            {{- toYaml .Values.hardening.containerSecurityContext | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - { name: seed, mountPath: /seed, readOnly: true }
+            - { name: data, mountPath: /data }
+      containers:
+        - name: admin
+          image: {{ include "emqx-mcp.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            - { name: MCP_ADMIN_CONFIG, value: /data/config.json }
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.jwt.secretName }}
+                  key: {{ .Values.jwt.secretKey }}
+            - { name: JWT_EXPIRY_HOURS, value: {{ .Values.jwt.expiryHours | quote }} }
+          {{- if .Values.hardening.enabled }}
+          securityContext:
+            {{- toYaml .Values.hardening.containerSecurityContext | nindent 12 }}
+          {{- end }}
+          volumeMounts: [{ name: data, mountPath: /data }]
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: seed
+          secret: { secretName: {{ .Values.config.secretName }} }
+        - name: data
+          emptyDir: {}

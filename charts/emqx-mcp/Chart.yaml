@@ -1,0 +1,23 @@
+apiVersion: v2
+name: emqx-mcp
+description: >-
+  EMQX MCP admin console on K3s: the EMQX v5 REST API exposed as 39 MCP tools,
+  behind a FastAPI admin GUI and MCP reverse proxy on a single port. Reproduces
+  the repository's k8s-deploy.yaml object for object.
+type: application
+version: 1.0.0
+appVersion: "v1.0.0"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - emqx
+  - mqtt
+  - mcp
+  - admin
+home: https://github.com/WOOWTECH/Woow_emqx_mcp_server
+sources:
+  - https://github.com/WOOWTECH/Woow_emqx_mcp_server
+  - https://github.com/WOOWTECH/Woow_k3s_emqx
+  - https://github.com/WOOWTECH/woow_n8n_mcp_server
+maintainers:
+  - name: WoowTech
+    url: https://github.com/WOOWTECH

@@ -7,3 +7,18 @@ dist/
 .pytest_cache/
 frontend/node_modules/
 frontend/dist/
+
+# Real secrets must never be committed - only the placeholder file
+# charts/emqx-mcp/examples/secrets.example.yaml.
+# Patterns are anchored to the repo root (leading /) on purpose: an unanchored
+# "secrets.yaml" would also match charts/emqx-mcp/templates/secrets.yaml and
+# silently keep the chart's own Secret template out of git.
+/secrets.yaml
+/*-secrets.yaml
+/*.secret.yaml
+/*secrets.values.yaml
+/*.local.yaml
+!/charts/emqx-mcp/templates/secrets.yaml
+
+# Packaged charts
+*.tgz

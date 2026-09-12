@@ -1,0 +1,144 @@
+# Default values for the emqx-mcp chart.
+#
+# The defaults reproduce k8s-deploy.yaml at the repository root object for
+# object: Namespace emqx-mcp, Deployment emqx-mcp-admin (seed-config init
+# container + admin container) and ClusterIP Service emqx-mcp-admin:8080.
+# The only deliberate addition is the `helm.sh/resource-policy: keep`
+# annotation from keepOnUninstall below.
+
+namespace:
+  # Render the Namespace object. A namespace equal to the release namespace
+  # (`-n`) is never rendered - create it with --create-namespace instead - so
+  # `helm uninstall` can never delete the namespace the release lives in.
+  create: true
+  # Empty means "use the release namespace (-n)", via `default .Release.Namespace`
+  # in emqx-mcp.ns (templates/_helpers.tpl). This is deliberate: every
+  # namespaced object in this chart is rendered into emqx-mcp.ns, so leaving
+  # this empty guarantees `helm install foo charts/emqx-mcp -n bar` only ever
+  # touches namespace `bar`, never a hardcoded name. k8s-deploy.yaml hardcodes
+  # namespace `emqx-mcp`; to reproduce that reference exactly, set this to
+  # "emqx-mcp" explicitly (deploy/local-k3s/emqx-mcp.yaml does this for the
+  # one live instance, which also always installs with `-n emqx-mcp`).
+  name: ""
+
+# Add `helm.sh/resource-policy: keep` to the Namespace and to chart-created
+# Secrets, so `helm uninstall` never deletes the admin password, the MCP token
+# or the EMQX API credentials. There are no PVCs in this chart: /data is an
+# emptyDir and the Secret is the source of truth.
+keepOnUninstall: true
+
+image:
+  repository: ghcr.io/woowtech/woow-emqx-mcp-admin
+  tag: v1.0.0
+  pullPolicy: IfNotPresent
+
+# Name of the dockerconfigjson Secret used to pull the image. The GHCR package
+# is private today; set this to "" once it is public and imagePullSecrets is
+# dropped from the pod spec entirely.
+imagePullSecret: ghcr-pull
+
+initImage:
+  repository: busybox
+  tag: "1.36"
+
+replicas: 1
+
+config:
+  # Secret holding key `config.json`. The init container copies it to
+  # /data/config.json on every start, so the Secret is the source of truth and
+  # anything changed in the GUI is lost on restart.
+  secretName: emqx-mcp-config
+
+jwt:
+  # Secret holding the JWT signing key used for admin sessions.
+  secretName: emqx-mcp-jwt
+  secretKey: secret
+  expiryHours: 24
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 1000m
+    memory: 768Mi
+
+# Rendered verbatim under the probe's httpGet on /healthz:8080. Extra keys
+# (timeoutSeconds, failureThreshold, ...) can be added here; the defaults are
+# exactly what k8s-deploy.yaml sets, so an upgrade rolls nothing.
+probes:
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 30
+
+service:
+  type: ClusterIP
+  port: 8080
+  # Extra labels on the Service object (not on the pod template, and not part
+  # of the selector, so changing them restarts nothing). Empty by default so
+  # the default render is exactly k8s-deploy.yaml; the live instance sets
+  # app.kubernetes.io/name here because the running Service carries that label
+  # even though the manifest never did - see deploy/local-k3s/emqx-mcp.yaml.
+  labels: {}
+
+# Opt-in pod hardening. OFF by default on purpose: every switch here changes
+# the pod template, which would restart the running pod. Turn it on only in a
+# maintenance window (see README "Follow-ups").
+hardening:
+  enabled: false
+  automountServiceAccountToken: false
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+# Tool gating written into config.json when secrets.create=true. Ignored
+# otherwise: the existing Secret already carries these.
+tools:
+  readonly: false
+  disabledTools: []
+  disabledCategories: []
+  disabledOperations: {}
+
+secrets:
+  # false (default): the three Secrets referenced by the Deployment already
+  #   exist (see examples/secrets.example.yaml) and the chart never renders
+  #   them, so `helm upgrade` can never overwrite a live credential.
+  # true: render all three from the values below (fresh installs, tests).
+  #   Every value below is guarded by required() - there are no defaults.
+  create: false
+  # config.json -> admin_password. Also the GUI login password.
+  adminPassword: ""
+  # config.json -> mcp_auth_token. Used as the /private_<token>/mcp/ path token.
+  mcpAuthToken: ""
+  # emqx-mcp-jwt/secret. Signs admin sessions; sessions break on rotation.
+  jwtSecret: ""
+  # Contents of ghcr-pull/.dockerconfigjson. Only required while imagePullSecret
+  # is set.
+  dockerConfigJson: ""
+  emqx:
+    # EMQX dashboard base URL, no /api/v5 suffix.
+    baseUrl: ""
+    apiKey: ""
+    apiSecret: ""
+
+tests:
+  # `helm test` smoke pod: /healthz, unauthenticated /api/health is rejected,
+  # admin login, dashboard health, MCP proxy reachable, bad MCP token rejected.
+  # Read-only: it never writes config, never touches the broker's state.
+  enabled: true
+  # Fail the smoke test when the broker itself is unreachable. false by default:
+  # the live console points at a LAN broker that the cluster cannot always
+  # reach, and an unreachable broker is a broker problem, not a chart problem.
+  requireBrokerHealthy: false

@@ -514,16 +514,32 @@ Open `http://localhost:8080` and log in. Configure the broker on the Connection 
 docker compose up -d
 ```
 
-### Option 3: Kubernetes
+### Option 3: Kubernetes (Helm — recommended)
+
+```bash
+helm install emqx-mcp charts/emqx-mcp -n emqx-mcp --create-namespace
+kubectl -n emqx-mcp get pods
+```
+
+[`charts/emqx-mcp`](charts/emqx-mcp/README.md) renders exactly the objects `k8s-deploy.yaml`
+declares, and adds what the manifest never had: the three Secrets are documented with
+placeholders in `charts/emqx-mcp/examples/secrets.example.yaml` and can be created by the chart
+with `--set secrets.create=true`, `helm uninstall` keeps them, and `helm test` runs a read-only
+smoke check of the GUI, the admin API and the MCP endpoint.
+
+### Option 3b: Kubernetes (raw manifest)
 
 ```bash
 kubectl apply -f k8s-deploy.yaml
 kubectl -n emqx-mcp get pods
 ```
 
-The manifest creates the namespace, a Secret holding `config.json`, a Deployment with readiness
-and liveness probes on `/healthz`, and a ClusterIP Service on `:8080`. An init container seeds
-`/data/config.json` from the Secret on every start, so the Secret is the source of truth.
+The manifest creates the namespace, a Deployment with readiness and liveness probes on
+`/healthz`, and a ClusterIP Service on `:8080`. It does **not** create any Secret: it only
+references `emqx-mcp-config`, `emqx-mcp-jwt` and `ghcr-pull`, so create those first (see
+`charts/emqx-mcp/examples/secrets.example.yaml`) or the pod hangs in `Init`. An init container
+seeds `/data/config.json` from `emqx-mcp-config` on every start, so the Secret is the source
+of truth.
 
 ### Option 4: Development
 

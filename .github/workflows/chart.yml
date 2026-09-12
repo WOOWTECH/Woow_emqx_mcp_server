@@ -1,0 +1,184 @@
+name: chart
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    working-directory: charts/emqx-mcp
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.19.5
+
+      - name: helm lint
+        run: helm lint .
+
+      - name: helm template (every values combination)
+        run: |
+          S="secrets.create=true,secrets.adminPassword=x,secrets.mcpAuthToken=x,secrets.jwtSecret=x,secrets.emqx.baseUrl=http://b:18083,secrets.emqx.apiKey=x,secrets.emqx.apiSecret=x,secrets.dockerConfigJson=DUMMY_DOCKERCONFIGJSON"
+          # namespace.name defaults to "" (-> the release namespace), so a
+          # plain `-n default` with no override must render everything into
+          # `default` and must NOT create a Namespace named emqx-mcp - that is
+          # the fix for the namespace-escape incident documented in the PR.
+          helm template emqx-mcp . -n default                 > /tmp/default-ns.yaml
+          helm template emqx-mcp . -n default \
+            --set namespace.name=emqx-mcp                     > /tmp/explicit-ns.yaml
+          helm template emqx-mcp . -n emqx-mcp                > /tmp/production.yaml
+          helm template emqx-mcp . -n default --set "$S"      > /tmp/secrets.yaml
+          helm template emqx-mcp . -n default \
+            --set hardening.enabled=true                      > /tmp/hardening.yaml
+          helm template emqx-mcp . -n emqx-mcp \
+            --set namespace.create=false,imagePullSecret=,tests.enabled=false \
+                                                              > /tmp/minimal.yaml
+          helm template emqx-mcp . -n emqx-mcp \
+            -f deploy/local-k3s/emqx-mcp.yaml                 > /tmp/instance.yaml
+
+      - name: kubeconform (schema validation)
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+          kubeconform -strict -summary \
+            /tmp/default-ns.yaml /tmp/explicit-ns.yaml /tmp/production.yaml /tmp/secrets.yaml \
+            /tmp/hardening.yaml /tmp/minimal.yaml /tmp/instance.yaml
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: Chart still renders k8s-deploy.yaml
+        run: scripts/check-drift.sh
+
+      - name: Instance values keep the live Service label
+        run: |
+          # The running Service carries a label k8s-deploy.yaml never declared.
+          # deploy/local-k3s/emqx-mcp.yaml reproduces it so --take-ownership
+          # does not strip it; the chart default must NOT render it, or the
+          # drift check against k8s-deploy.yaml above would fail.
+          python3 - <<'EOF'
+          import sys, yaml
+          def svc(path):
+              for d in yaml.safe_load_all(open(path)):
+                  if d and d["kind"] == "Service":
+                      return d["metadata"].get("labels") or {}
+              sys.exit(f"{path}: no Service rendered")
+          want = {"app.kubernetes.io/name": "emqx-mcp-admin"}
+          got = svc("/tmp/instance.yaml")
+          if got != want:
+              sys.exit(f"instance render Service labels {got} != live {want}")
+          if svc("/tmp/production.yaml"):
+              sys.exit("default render must not put labels on the Service")
+          print("instance render keeps the live Service label; default render does not")
+          EOF
+
+      - name: Required secrets are enforced
+        run: |
+          if helm template emqx-mcp . --set secrets.create=true > /dev/null 2>&1; then
+            echo "secrets.create=true rendered without any secret values"; exit 1
+          fi
+          echo "required() guards fire"
+          # All 3 Secrets must render; catches templates/secrets.yaml going
+          # missing from git behind an unanchored .gitignore pattern.
+          n=$(grep -c '^kind: Secret$' /tmp/secrets.yaml || true)
+          [ "$n" -eq 3 ] || { echo "expected 3 Secrets with secrets.create=true, got $n"; exit 1; }
+          echo "secrets.create=true renders all 3 Secrets"
+          # namespace.name defaults to "" (-> -n), so a plain install must
+          # never create a Namespace outside the one it was given with -n -
+          # this is the fix for the namespace-escape incident in the PR.
+          if grep -q '^kind: Namespace$' /tmp/default-ns.yaml; then
+            echo "namespace.name must default to the release namespace: no Namespace object with a plain -n and no override"; exit 1
+          fi
+          if ! grep -q '^  namespace: default$' /tmp/default-ns.yaml; then
+            echo "a plain -n default install must put every object in namespace 'default'"; exit 1
+          fi
+          # Stronger than "at least one": EVERY rendered namespace: line must be
+          # the one given with -n, so no template can hardcode a namespace.
+          stray=$(grep '^  namespace:' /tmp/default-ns.yaml | grep -v '^  namespace: default$' || true)
+          if [ -n "$stray" ]; then
+            echo "objects rendered outside -n: $stray"; exit 1
+          fi
+          # Same assertion against a sentinel that appears nowhere in the chart.
+          helm template t . -n SENTINEL --skip-tests > /tmp/sentinel.yaml
+          stray=$(grep '^  namespace:' /tmp/sentinel.yaml | grep -v '^  namespace: SENTINEL$' || true)
+          if [ -n "$stray" ]; then
+            echo "-n SENTINEL rendered objects elsewhere: $stray"; exit 1
+          fi
+          echo "namespace.name defaults to -n; a plain install cannot escape it"
+          # The Namespace equal to -n is never rendered, so uninstall cannot delete it.
+          grep -q '^kind: Namespace$' /tmp/explicit-ns.yaml || { echo "Namespace missing"; exit 1; }
+          if grep -q '^kind: Namespace$' /tmp/production.yaml; then
+            echo "Namespace must not render when it equals the release namespace"; exit 1
+          fi
+          echo "release-namespace guard works"
+
+      - name: Uninstall keeps data
+        run: |
+          # Namespace and every chart-created Secret must carry the keep policy.
+          python3 - <<'EOF'
+          import sys, yaml
+          bad = []
+          for path in ("/tmp/explicit-ns.yaml", "/tmp/secrets.yaml"):
+              for d in yaml.safe_load_all(open(path)):
+                  if not d or d["kind"] not in ("Namespace", "Secret", "PersistentVolumeClaim"):
+                      continue
+                  ann = (d["metadata"].get("annotations") or {})
+                  if ann.get("helm.sh/resource-policy") != "keep":
+                      bad.append(f"{path}: {d['kind']}/{d['metadata']['name']} has no keep policy")
+          sys.exit("\n".join(bad)) if bad else print("keepOnUninstall covers every stateful object")
+          EOF
+
+      - name: No real secrets committed
+        run: |
+          python3 - <<'EOF'
+          import sys, yaml
+          bad = []
+          v = yaml.safe_load(open("values.yaml"))["secrets"]
+          for k, val in v.items():
+              if k == "create":
+                  continue
+              if k == "emqx":
+                  if any(val.values()):
+                      bad.append("values.yaml secrets.emqx.* must be empty")
+              elif val:
+                  bad.append(f"values.yaml secrets.{k} must be empty")
+          for d in yaml.safe_load_all(open("/tmp/production.yaml")):
+              if d and d["kind"] == "Secret":
+                  bad.append("default render must not contain Secrets (secrets.create=false)")
+          for d in yaml.safe_load_all(open("examples/secrets.example.yaml")):
+              for k, val in ((d or {}).get("stringData") or {}).items():
+                  if "REPLACE_ME" not in str(val):
+                      bad.append(f"examples: {d['metadata']['name']}.{k} is not a placeholder")
+          sys.exit("\n".join(bad)) if bad else print("no secrets committed")
+          EOF
+
+      - name: Packaged chart keeps every template
+        run: |
+          # .helmignore directory patterns must be anchored (/deploy/), or a
+          # pattern like "tests/" would silently drop templates/tests/smoke.yaml
+          # from the package - the same class of bug the .gitignore comment
+          # warns about, but for `helm package` instead of git.
+          helm package . -d /tmp/pkg > /dev/null
+          got=$(tar -tzf /tmp/pkg/emqx-mcp-*.tgz | sed 's|^emqx-mcp/||' | sort)
+          echo "$got"
+          for f in Chart.yaml values.yaml templates/_helpers.tpl templates/NOTES.txt \
+                   templates/deployment.yaml templates/namespace.yaml \
+                   templates/secrets.yaml templates/service.yaml \
+                   templates/tests/smoke.yaml; do
+            echo "$got" | grep -qx "$f" || { echo "missing from package: $f"; exit 1; }
+          done
+          # deploy/ is instance values, passed with -f; it must NOT be packaged.
+          if echo "$got" | grep -q '^deploy/'; then
+            echo "deploy/ must not be packaged"; exit 1
+          fi
+          echo "package contains all 9 chart files and no instance values"
+
+      - name: Shell scripts parse
+        run: bash -n scripts/*.sh

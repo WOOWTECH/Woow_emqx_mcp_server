@@ -1,0 +1,119 @@
+{{- /*
+`helm test` smoke pod. Read-only - it never writes config and never changes
+broker state:
+  1. /healthz is 200 and reports ok
+  2. / serves the built SPA shell (the GUI is really in the image)
+  3. /api/health without a token is 401 (the JWT middleware is on)
+  4. /api/auth/login with the admin password from the Secret returns a JWT
+  5. /api/health with that JWT is 200 and app_type=emqx, and the MCP child
+     process is running
+  6. the MCP proxy answers `initialize` on /private_<mcp_auth_token>/mcp/
+  7. a wrong path token is rejected with 403
+
+Uses the application image: it already ships Python, and the runtime has no
+curl. The config Secret is mounted read-only to read the admin password and
+the MCP path token, so neither has to be passed on a command line.
+*/ -}}
+{{- if .Values.tests.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-smoke
+  namespace: {{ include "emqx-mcp.ns" . }}
+  labels:
+    {{- include "emqx-mcp.partOf" . | nindent 4 }}
+    app.kubernetes.io/component: smoke-test
+  annotations:
+    helm.sh/hook: test
+    # Kept until the next `helm test` so `helm test --logs` can always read it.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  {{- if .Values.imagePullSecret }}
+  imagePullSecrets:
+    - name: {{ .Values.imagePullSecret }}
+  {{- end }}
+  containers:
+    - name: smoke
+      image: {{ include "emqx-mcp.image" . }}
+      command: [python, -c]
+      args:
+        - |
+          import json, os, sys, urllib.error, urllib.request
+
+          BASE = os.environ["BASE_URL"]
+          cfg = json.load(open("/seed/config.json"))
+          password, token = cfg["admin_password"], cfg["mcp_auth_token"]
+
+          def call(path, data=None, headers=None, method=None):
+              body = json.dumps(data).encode() if data is not None else None
+              h = {"Content-Type": "application/json"} if body else {}
+              h.update(headers or {})
+              req = urllib.request.Request(BASE + path, data=body, headers=h, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return r.status, r.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode("utf-8", "replace")
+
+          s, body = call("/healthz")
+          assert s == 200 and json.loads(body).get("status") == "ok", (s, body)
+          print("1. /healthz:", body.strip())
+
+          s, body = call("/")
+          assert s == 200 and 'id="root"' in body, (s, body[:200])
+          print("2. GUI shell served, %d bytes" % len(body))
+
+          s, _ = call("/api/health")
+          assert s == 401, "unauthenticated /api/health must be 401, got %s" % s
+          print("3. unauthenticated /api/health: 401")
+
+          s, body = call("/api/auth/login", {"password": password})
+          assert s == 200, (s, body)
+          jwt = json.loads(body)["token"]
+          print("4. admin login: got a %d-char JWT" % len(jwt))
+
+          s, body = call("/api/health", headers={"Authorization": "Bearer " + jwt})
+          assert s == 200, (s, body)
+          health = json.loads(body)
+          assert health.get("app_type") == "emqx", body
+          assert health["mcp_server"]["healthy"], "MCP child process is not running: %s" % body
+          broker = health["target_app"]
+          print("5. dashboard: status=%s mcp=running broker=%s version=%s connections=%s"
+                % (health.get("overall_status"), broker.get("healthy"),
+                   broker.get("version"), health.get("item_count")))
+          if os.environ.get("REQUIRE_BROKER_HEALTHY") == "true":
+              assert broker.get("healthy"), "broker unreachable: %s" % broker.get("error")
+
+          init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                  "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                             "clientInfo": {"name": "helm-test", "version": "1"}}}
+          s, body = call("/private_%s/mcp/" % token, init,
+                         {"Accept": "application/json, text/event-stream"})
+          assert s == 200 and '"result"' in body, (s, body[:300])
+          print("6. MCP initialize: 200, %s" % body.strip().splitlines()[-1][:160])
+
+          s, _ = call("/private_not-the-token/mcp/", init,
+                      {"Accept": "application/json, text/event-stream"})
+          assert s == 403, "a wrong MCP path token must be 403, got %s" % s
+          print("7. wrong MCP path token: 403")
+
+          print("SMOKE OK")
+      env:
+        - name: BASE_URL
+          value: http://emqx-mcp-admin.{{ include "emqx-mcp.ns" . }}.svc.cluster.local:{{ .Values.service.port }}
+        - name: REQUIRE_BROKER_HEALTHY
+          value: {{ .Values.tests.requireBrokerHealthy | quote }}
+      volumeMounts:
+        - { name: seed, mountPath: /seed, readOnly: true }
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+  volumes:
+    - name: seed
+      secret: { secretName: {{ .Values.config.secretName }} }
+{{- end }}
