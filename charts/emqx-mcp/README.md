@@ -289,3 +289,23 @@ for a like-for-like chart conversion:
    falls back to `admin_password: "admin"`, and `docker-compose.yml` /
    `.env.example` ship `JWT_SECRET=change-me`. The chart never uses them —
    `required()` makes every credential explicit — but the Docker paths do.
+7. **The private GHCR pull path itself is unproven under this chart.**
+   `ghcr.io/woowtech/woow-emqx-mcp-admin:v1.0.0` is a private package (an
+   anonymous `ghcr.io` token comes back empty and the manifest is `HTTP 403`),
+   and borrowing the live pull credential was not allowed while this chart was
+   being built, so every test ran an image built from this repository's own
+   unmodified `Dockerfile` and pulled it without `ghcr-pull`. What is proven is
+   that the pod spec carries `imagePullSecrets: [ghcr-pull]` exactly as
+   `k8s-deploy.yaml` does, and that the running application works. Confirm the
+   pull on the first real takeover (the live pod already runs that image, and
+   `IfNotPresent` means it will not re-pull), or make the package public and set
+   `imagePullSecret: ""`.
+8. **Nothing in `values.yaml` guards the silent rewrite in row 2 of the
+   reinstall table.** `secrets.create=true` under a release that already owns
+   kept Secrets adopts them and overwrites their contents with whatever values
+   are passed, with no prompt. Today's mitigation is the `secrets.create: false`
+   default plus that table. A values-level guard — refuse to overwrite an
+   existing Secret unless an explicit `secrets.overwriteExisting=true` is set —
+   needs Helm's `lookup`, which is inert during `helm template` and therefore
+   cannot be covered by the CI checks above, so it belongs in a round that can
+   test it against a live cluster.

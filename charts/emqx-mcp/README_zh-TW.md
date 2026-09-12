@@ -268,3 +268,19 @@ metadata 上、不會碰到 pod template，所以同樣不會造成重啟。
    會 fallback 到 `admin_password: "admin"`，`docker-compose.yml` 和 `.env.example`
    則帶著 `JWT_SECRET=change-me`。chart 從不使用它們（`required()` 讓每個憑證都必須
    明確給定），但 Docker 那幾條路徑會踩到。
+7. **這個 chart 沒有真正驗過私有 GHCR 的 pull 路徑。**
+   `ghcr.io/woowtech/woow-emqx-mcp-admin:v1.0.0` 是私有 package（匿名
+   `ghcr.io` token 拿回來是空的、manifest 是 `HTTP 403`），而建這個 chart 的期間
+   不允許借用線上的 pull 憑證，所以每一次測試都是用這個 repo 自己那份沒改過的
+   `Dockerfile` 建出映像、在不需要 `ghcr-pull` 的情況下拉下來。已經證明的是 pod spec
+   帶著 `imagePullSecrets: [ghcr-pull]`、和 `k8s-deploy.yaml` 一模一樣，而且應用本身
+   跑得起來。真正的 pull 請在第一次接管時確認（線上 pod 已經在跑那個映像，
+   `IfNotPresent` 也不會重新拉），或者把 package 改成 public 並設
+   `imagePullSecret: ""`。
+8. **`values.yaml` 沒有任何東西擋得住重裝表格第 2 列那種無聲覆寫。**
+   同一個 release 底下用 `secrets.create=true` 重裝時，Helm 會認領那些被保留的
+   Secret，然後用你傳進去的值直接覆蓋內容，不會問你。目前的緩解就是預設的
+   `secrets.create: false` 加上那張表。要做成 values 層級的防呆（除非明確設
+   `secrets.overwriteExisting=true`，否則拒絕覆蓋既有 Secret）會用到 Helm 的
+   `lookup`，而 `lookup` 在 `helm template` 階段是空的、上面那些 CI 檢查涵蓋不到，
+   所以應該留到有辦法對真實叢集測試的那一輪再做。
