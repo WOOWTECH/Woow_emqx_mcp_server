@@ -151,12 +151,22 @@ curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconf
   | tar -xz -C /usr/local/bin kubeconform
 helm lint charts/emqx-mcp
 kubeconform -strict -summary <rendered values combinations>
-# 6 combinations (default-ns, instance, production, secrets.create=true,
-# hardening, minimal) -> 23 resources found in 6 files - Valid: 23
+# 7 combinations (default-ns, explicit-ns, instance, production,
+# secrets.create=true, hardening, minimal)
+#   -> 24 resources found in 7 files - Valid: 24, Invalid: 0, Errors: 0
 ```
 
-v0.6.7 and v0.8.0 both report 23/23 on this chart today, but only v0.6.7 is the
+v0.6.7 and v0.8.0 both report 24/24 on this chart today, but only v0.6.7 is the
 number CI will reproduce.
+
+No template may hardcode a namespace. CI asserts it, and so can you — every
+rendered `namespace:` must be the one passed with `-n`:
+
+```bash
+helm template t charts/emqx-mcp -n SENTINEL --skip-tests | grep '^  namespace:'
+#   namespace: SENTINEL
+#   namespace: SENTINEL
+```
 
 ## Uninstall — data is kept
 

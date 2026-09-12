@@ -145,11 +145,21 @@ curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconf
   | tar -xz -C /usr/local/bin kubeconform
 helm lint charts/emqx-mcp
 kubeconform -strict -summary <各種 values 組合算出來的 render>
-# 6 種組合（default-ns、instance、production、secrets.create=true、
-# hardening、minimal）-> 23 resources found in 6 files - Valid: 23
+# 7 種組合（default-ns、explicit-ns、instance、production、
+# secrets.create=true、hardening、minimal）
+#   -> 24 resources found in 7 files - Valid: 24, Invalid: 0, Errors: 0
 ```
 
-這個 chart 目前用 v0.6.7 和 v0.8.0 跑都是 23/23，但只有 v0.6.7 是 CI 會重現的數字。
+這個 chart 目前用 v0.6.7 和 v0.8.0 跑都是 24/24，但只有 v0.6.7 是 CI 會重現的數字。
+
+template 裡不可以寫死 namespace。CI 會檢查，你自己也可以驗：渲染出來的每一行
+`namespace:` 都必須等於 `-n` 給的值。
+
+```bash
+helm template t charts/emqx-mcp -n SENTINEL --skip-tests | grep '^  namespace:'
+#   namespace: SENTINEL
+#   namespace: SENTINEL
+```
 
 ## 移除 —— 資料會留著
 

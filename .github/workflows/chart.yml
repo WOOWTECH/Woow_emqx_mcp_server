@@ -96,8 +96,20 @@ jobs:
           if grep -q '^kind: Namespace$' /tmp/default-ns.yaml; then
             echo "namespace.name must default to the release namespace: no Namespace object with a plain -n and no override"; exit 1
           fi
-          if ! grep -q '  namespace: default$' /tmp/default-ns.yaml; then
+          if ! grep -q '^  namespace: default$' /tmp/default-ns.yaml; then
             echo "a plain -n default install must put every object in namespace 'default'"; exit 1
+          fi
+          # Stronger than "at least one": EVERY rendered namespace: line must be
+          # the one given with -n, so no template can hardcode a namespace.
+          stray=$(grep '^  namespace:' /tmp/default-ns.yaml | grep -v '^  namespace: default$' || true)
+          if [ -n "$stray" ]; then
+            echo "objects rendered outside -n: $stray"; exit 1
+          fi
+          # Same assertion against a sentinel that appears nowhere in the chart.
+          helm template t . -n SENTINEL --skip-tests > /tmp/sentinel.yaml
+          stray=$(grep '^  namespace:' /tmp/sentinel.yaml | grep -v '^  namespace: SENTINEL$' || true)
+          if [ -n "$stray" ]; then
+            echo "-n SENTINEL rendered objects elsewhere: $stray"; exit 1
           fi
           echo "namespace.name defaults to -n; a plain install cannot escape it"
           # The Namespace equal to -n is never rendered, so uninstall cannot delete it.
